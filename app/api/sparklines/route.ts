@@ -6,22 +6,30 @@ const BASE = process.env.COINGECKO_BASE || "https://api.coingecko.com/api/v3"
 const KEY = process.env.COINGECKO_API_KEY || ""
 const TTL = Number(process.env.SPARK_TTL_SECONDS ?? 300)
 
+function getCoinGeckoHeaders() {
+  const isPro = process.env.COINGECKO_BASE?.includes('pro-api')
+  const headerKey = isPro ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key'
+  return { [headerKey]: KEY }
+}
+
 export async function GET(req: NextRequest) {
   const ids = (req.nextUrl.searchParams.get("ids") ?? "")
     .split(",").map(s => s.trim()).filter(Boolean)
+  const MAX_IDS = 50
+  const limitedIds = [...new Set(ids)].slice(0, MAX_IDS)
   const window = req.nextUrl.searchParams.get("window") ?? "24h"
-  if (ids.length === 0) return Response.json({ series: {} })
+  if (limitedIds.length === 0) return Response.json({ series: {} })
 
   const series: Record<string, number[]> = {}
   const missing: string[] = []
-  for (const id of ids) {
+  for (const id of limitedIds) {
     const hit = await kvGet<number[]>(`spark:${id}:${window}`)
     if (hit) series[id] = hit; else missing.push(id)
   }
 
   await Promise.all(missing.map(async id => {
     const url = `${BASE}/coins/${id}/market_chart?vs_currency=usd&days=1`
-    const r = await fetch(url, { headers: { "x-cg-demo-api-key": KEY } })
+    const r = await fetch(url, { headers: getCoinGeckoHeaders() })
     if (!r.ok) { series[id] = []; return }
     const data = await r.json() as { prices: [number, number][] }
     const pts = downsample(data.prices.map(p => p[1]), 24)

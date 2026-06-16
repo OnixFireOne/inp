@@ -13,6 +13,12 @@ const KEY = process.env.COINGECKO_API_KEY || ""
 const TTL = Number(process.env.MARKETS_TTL_SECONDS ?? 45)
 const PER_PAGE = 100
 
+function getCoinGeckoHeaders() {
+  const isPro = process.env.COINGECKO_BASE?.includes('pro-api')
+  const headerKey = isPro ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key'
+  return { [headerKey]: KEY }
+}
+
 export async function GET(req: NextRequest) {
   const pageRaw = Number(req.nextUrl.searchParams.get("page") ?? "1")
   const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 1
@@ -26,7 +32,7 @@ export async function GET(req: NextRequest) {
     `&order=market_cap_desc&per_page=${PER_PAGE}&page=${page}` +
     `&sparkline=true&price_change_percentage=24h`
 
-  const res = await fetch(url, { headers: { "x-cg-demo-api-key": KEY } })
+  const res = await fetch(url, { headers: getCoinGeckoHeaders() })
   if (!res.ok) {
     return json({ rows: [], page, perPage: PER_PAGE, hasMore: false }, 200)
   }

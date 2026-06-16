@@ -40,5 +40,6 @@ next-env.d.ts
 #my plan build doc
 /plan
 catalog.seed.json
-coingecko-overrides.json
+/scripts/import.ts
+#coingecko-overrides.json
 verify-coingecko.mjs

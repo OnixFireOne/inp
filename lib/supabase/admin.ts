@@ -1,3 +1,4 @@
+import "server-only"
 import { createClient } from "@supabase/supabase-js"
 
 // 2026: secret key only, for server-side admin/seed operations. Never in browser.

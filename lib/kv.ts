@@ -39,12 +39,13 @@ export async function kvGet<T>(key: string): Promise<T | null> {
         { headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` }, cache: "no-store" }
       )
       if (res.ok) {
-        const data = (await res.json()) as { result: T | null }
+        const data = (await res.json()) as { result: string | null }
         if (data.result != null) {
+          const parsed = JSON.parse(data.result) as T
           // Mirror to in-memory cache
           const ttl = 60_000 // default 60s if we don't know the TTL
-          memCache.set(key, { data: data.result, expiresAt: Date.now() + ttl })
-          return data.result
+          memCache.set(key, { data: parsed, expiresAt: Date.now() + ttl })
+          return parsed
         }
       }
     } catch { /* best-effort */ }

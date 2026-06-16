@@ -6,21 +6,29 @@ const BASE = process.env.COINGECKO_BASE || "https://api.coingecko.com/api/v3"
 const KEY = process.env.COINGECKO_API_KEY || ""
 const TTL = Number(process.env.PRICE_TTL_SECONDS ?? 20)
 
+function getCoinGeckoHeaders() {
+  const isPro = process.env.COINGECKO_BASE?.includes('pro-api')
+  const headerKey = isPro ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key'
+  return { [headerKey]: KEY }
+}
+
 export async function GET(req: NextRequest) {
   const ids = (req.nextUrl.searchParams.get("ids") ?? "")
     .split(",").map(s => s.trim()).filter(Boolean)
-  if (ids.length === 0) return Response.json({ quotes: {} })
+  const MAX_IDS = 50
+  const limitedIds = [...new Set(ids)].slice(0, MAX_IDS)
+  if (limitedIds.length === 0) return Response.json({ quotes: {} })
 
-  const cacheKey = `prices:${[...ids].sort().join(",")}`
+  const cacheKey = `prices:${[...limitedIds].sort().join(",")}`
   const cached = await kvGet<PricesResponse>(cacheKey)
   if (cached) return json(cached)
 
   const url = `${BASE}/coins/markets?vs_currency=usd`
-    + `&ids=${encodeURIComponent(ids.join(","))}`
+    + `&ids=${encodeURIComponent(limitedIds.join(","))}`
     + `&price_change_percentage=24h&per_page=250&page=1`
 
   const res = await fetch(url, {
-    headers: { "x-cg-demo-api-key": KEY },
+    headers: getCoinGeckoHeaders(),
   })
   if (!res.ok) return json({ quotes: {} }, 200)
 
