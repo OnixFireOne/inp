@@ -16,19 +16,24 @@ export function useWatchlist() {
   }, [])
 
   async function toggle(assetId: string) {
-    const next = ids.includes(assetId)
+    const wasIn = ids.includes(assetId)
+    const next = wasIn
       ? ids.filter(id => id !== assetId)
       : [...ids, assetId]
     setIds(next)
     localStorage.setItem("inp.watchlist", JSON.stringify(next))
 
-    // if signed in, sync to DB (optimistic)
     const { data: { user } } = await sb.auth.getUser()
     if (user) {
-      if (next.includes(assetId)) {
-        await sb.from("watchlist").insert({ user_id: user.id, asset_id: assetId }).catch(() => {})
-      } else {
-        await sb.from("watchlist").delete().match({ user_id: user.id, asset_id: assetId }).catch(() => {})
+      const op = wasIn
+        ? sb.from("watchlist").delete().match({ user_id: user.id, asset_id: assetId })
+        : sb.from("watchlist").insert({ user_id: user.id, asset_id: assetId })
+      const { error } = await op
+      if (error) {
+        // rollback on DB failure
+        const rollback = wasIn ? [...next, assetId] : next.filter(id => id !== assetId)
+        setIds(rollback)
+        localStorage.setItem("inp.watchlist", JSON.stringify(rollback))
       }
     }
   }

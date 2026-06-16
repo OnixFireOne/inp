@@ -5,10 +5,10 @@ export async function supabaseServer() {
   const store = await cookies()
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
     { cookies: {
       getAll: () => store.getAll(),
-      setAll: (xs) => xs.forEach(({name,value,options}) => store.set(name,value,options)),
+      setAll: (xs: Array<{name:string;value:string;options?:object}>) => xs.forEach(({name,value,options}) => store.set(name,value,options)),
     }},
   )
 }

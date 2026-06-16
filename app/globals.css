@@ -1,37 +1,339 @@
 @import "tailwindcss";
 
-@theme {
-  --color-bg: #0e1116;
-  --color-surface: #161a22;
-  --color-surface-2: #1d222c;
-  --color-border: #232936;
-  --color-text: #e6e9ef;
-  --color-text-mut: #8b93a3;
-  --color-accent: #6e8bff;
-  --color-up: #3ec98a;
-  --color-down: #f0666b;
+:root {
+  /* Dark theme tokens (default) */
+  --bg: #0e1116;
+  --surface: #161a22;
+  --surface-2: #1d222c;
+  --border: #232936;
+  --text: #e6e9ef;
+  --text-mut: #8b93a3;
+  --accent: #6e8bff;
+  --up: #3ec98a;
+  --down: #f0666b;
   --radius: 14px;
+  --row-h: 56px;
+  --maxw: 1200px;
+  --drawer-w: 440px;
+  /* System font stack (no Geist / no next/font). */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, monospace;
 }
 
-/* light theme override via data attribute */
 :root[data-theme="light"] {
-  --color-bg: #fafbfc;
-  --color-surface: #ffffff;
-  --color-surface-2: #f3f5f8;
-  --color-border: #e7eaf0;
-  --color-text: #10141b;
-  --color-text-mut: #5b6472;
-  --color-accent: #4f6bff;
-  --color-up: #16a36b;
-  --color-down: #e0454b;
+  --bg: #f8f9fb;
+  --surface: #ffffff;
+  --surface-2: #f0f2f7;
+  --border: #e2e6ee;
+  --text: #0f1218;
+  --text-mut: #5f6777;
+  --accent: #3f5cff;
+  --up: #0f9c6b;
+  --down: #e33f47;
 }
 
 body {
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  font-family: Inter, system-ui, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
 }
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+.font-mono,
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+}
+
+/* Row height */
+.row-h {
+  height: var(--row-h);
+}
+
+/* Icon buttons (star, chart, theme, close) */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-mut);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.icon-btn:hover {
+  background-color: var(--surface-2);
+  color: var(--text);
+}
+.icon-btn.star.active {
+  color: #f3c969;
+}
+
+/* Sparkline window toggle in table header */
+.spark-toggle-btn {
+  transition: background-color 120ms ease, color 120ms ease;
+  border-radius: 0;
+  color: var(--text-mut);
+}
+.spark-toggle-btn:hover {
+  background-color: var(--surface-2);
+  color: var(--text);
+}
+
+/* Link cards (drawer) */
+.link-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.link-card:hover {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+/* Favicon / thumbnail in a link card or chip */
+.link-icon {
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  object-fit: contain;
+}
+.link-icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Category chips */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.chip:hover {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+/* Drawer panel (desktop) */
+.drawer-panel {
+  animation: drawerSlide 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes drawerSlide {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Drawer body: outer wrapper keeps overflow visible so tooltips can escape. */
+.drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
+  position: relative;
+}
+
+/* Inner scroll container */
+.drawer-scroll {
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  /* Important: allow positioned children to escape horizontally */
+  overflow-x: visible;
+}
+.drawer-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.drawer-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.drawer-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+.drawer-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-mut);
+}
+
+/* Coin icon */
+.coin {
+  object-fit: cover;
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+/* Asset name: hover affordance → accent underline + chevron */
+.asset-row .asset-name {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.asset-row:hover .asset-name {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+.asset-row .asset-chevron {
+  opacity: 0;
+  margin-left: 2px;
+  color: var(--accent);
+  transition: opacity 120ms ease, transform 120ms ease;
+  transform: translateX(-2px);
+}
+.asset-row:hover .asset-chevron {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Star button (hover-only) */
+.asset-row .star-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--text-mut);
+  opacity: 0;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+.asset-row:hover .star-btn,
+.asset-row .star-btn.active {
+  opacity: 1;
+}
+.asset-row .star-btn:hover {
+  background-color: var(--surface-2);
+  color: var(--text);
+}
+.asset-row .star-btn.active {
+  color: #f3c969;
+}
+
+/* Sparkline cell: clickable button with hover affordance */
+.asset-row .sparkline-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  position: relative;
+  transition: background-color 120ms ease;
+}
+.asset-row .sparkline-btn:hover {
+  background-color: var(--surface-2);
+}
+.asset-row .sparkline-btn:hover svg polyline {
+  stroke-width: 2.6;
+  filter: brightness(1.15);
+}
+.asset-row .sparkline-corner {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-mut);
+  background: var(--bg);
+  opacity: 0;
+  transform: translate(2px, -2px);
+  transition: opacity 120ms ease, transform 120ms ease, color 120ms ease;
+}
+.asset-row .sparkline-btn:hover .sparkline-corner {
+  opacity: 1;
+  transform: translate(0, 0);
+  color: var(--accent);
+}
+
+/* Responsive table tweaks */
+@media (max-width: 640px) {
+  .row-h { height: 64px; }
+}
+
+/* Link icon button (drawer) — icon only, Radix Tooltip on hover */
+.link-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-mut);
+  text-decoration: none;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.link-icon-btn:hover {
+  background: var(--surface);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Radix Tooltip content (rendered via Portal → escape overflow) */
+.link-tooltip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  max-width: 320px;
+  z-index: 100;
+  animation: tooltipIn 140ms ease-out;
+}
+@keyframes tooltipIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.link-tooltip-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.link-tooltip-desc {
+  font-size: 11px;
+  color: var(--text-mut);
+  line-height: 1.35;
+  margin-top: 2px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Price digits: bold */
+.asset-row td:nth-child(3) .tabular-nums {
+  font-weight: 700;
+}
+.asset-row td:nth-child(3) span {
+  font-weight: 700;
 }

@@ -2,8 +2,6 @@ import { NextRequest } from "next/server"
 import { kvGet, kvSetEx } from "@/lib/kv"
 import type { PricesResponse } from "@/lib/types"
 
-export const runtime = "edge"
-
 const BASE = process.env.COINGECKO_BASE || "https://api.coingecko.com/api/v3"
 const KEY = process.env.COINGECKO_API_KEY || ""
 const TTL = Number(process.env.PRICE_TTL_SECONDS ?? 20)
@@ -33,6 +31,7 @@ export async function GET(req: NextRequest) {
     quotes[r.id] = {
       price: r.current_price,
       change24h: r.price_change_percentage_24h ?? 0,
+      marketCap: r.market_cap ?? null,
       ts: now,
     }
   }

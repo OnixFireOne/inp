@@ -1,29 +1,63 @@
-import type { Link } from '@/types/asset';
+import type { Link } from "@/types/asset"
+import { LinkIconBtn } from "./LinkIconBtn"
 
 interface LinkListProps {
-  links: Link[];
-  category: string;
+  links: Link[]
 }
 
-export function LinkList({ links, category }: LinkListProps) {
-  const core = links.filter(l => l.tier === 'Core');
-  const trusted = links.filter(l => l.tier === 'Trusted');
+// Group by category. "Core" tier = Top links card.
+// Trusted links = chip grid.
+// Visible: icon only. Name + description shown on hover (custom tooltip span).
+export function LinkList({ links }: LinkListProps) {
+  const core = links.filter((l) => l.tier === "Core")
+  const trusted = links.filter((l) => l.tier === "Trusted")
+
+  const byCategory = new Map<string, Link[]>()
+  for (const l of trusted) {
+    const k = l.category || "Other"
+    if (!byCategory.has(k)) byCategory.set(k, [])
+    byCategory.get(k)!.push(l)
+  }
+
+  if (links.length === 0) return null
 
   return (
-    <div className="mb-6">
-      <div className="font-medium mb-2">{category}</div>
-      {core.map(link => (
-        <a key={link.id} href={link.href} target="_blank" className="block py-1 hover:text-[var(--accent)]">
-          {link.name} {link.description && <span className="text-xs text-[var(--text-mut)]">— {link.description}</span>}
-        </a>
+    <div className="space-y-6">
+      {core.length > 0 && (
+        <section>
+          <div className="text-xs uppercase tracking-wide text-[var(--text-mut)] mb-2">Top links</div>
+          <div className="flex flex-wrap gap-2">
+            {core.map((link) => (
+              <LinkIconBtn
+                key={link.id}
+                href={link.href}
+                thumbnailUrl={link.thumbnailUrl}
+                name={link.name}
+                description={link.description}
+                size={28}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {Array.from(byCategory.entries()).map(([category, items]) => (
+        <section key={category}>
+          <div className="text-xs uppercase tracking-wide text-[var(--text-mut)] mb-2">{category}</div>
+          <div className="flex flex-wrap gap-2">
+            {items.map((link) => (
+              <LinkIconBtn
+                key={link.id}
+                href={link.href}
+                thumbnailUrl={link.thumbnailUrl}
+                name={link.name}
+                description={link.description}
+                size={20}
+              />
+            ))}
+          </div>
+        </section>
       ))}
-      <div className="flex flex-wrap gap-2 mt-2">
-        {trusted.map(link => (
-          <a key={link.id} href={link.href} target="_blank" className="px-3 py-1 text-sm rounded-full bg-[var(--surface-2)] hover:bg-[var(--surface)]">
-            {link.name}
-          </a>
-        ))}
-      </div>
     </div>
-  );
+  )
 }

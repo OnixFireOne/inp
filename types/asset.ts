@@ -16,4 +16,5 @@ export interface Link {
   tier: 'Core' | 'Trusted';
   category: string;
   health?: string;
+  thumbnailUrl?: string | null;
 }

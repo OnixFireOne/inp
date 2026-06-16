@@ -1,56 +1,122 @@
-'use client';
+"use client"
 
-import { Sparkline } from './Sparkline';
-import { PriceCell } from './PriceCell';
-import type { Asset } from '@/types/asset';
-import type { Quote } from '@/lib/types';
-import { useWatchlist } from '@/hooks/useWatchlist';
+// AssetRow — single market row.
+// Interactions:
+//   • Click anywhere on the row → open drawer (curated links).
+//   • Hover the asset name/icon → affordance (accent underline, brighter icon, chevron).
+//   • Click the sparkline cell → open ChartModal (stops propagation).
+
+import { SparklineCell } from "./SparklineCell"
+import { PriceCell } from "./PriceCell"
+import { ChangeCell } from "./ChangeCell"
+import { MarketCapCell } from "./MarketCapCell"
+import type { MarketRow, SparkWindow } from "@/lib/types"
+import { warmTradingView } from "@/components/TvChart"
+import { prefetchLinks } from "@/lib/prefetch"
 
 interface AssetRowProps {
-  asset: Asset;
-  index: number;
-  quote?: Quote;
-  sparkData?: number[];
+  row: MarketRow
+  index: number
+  sparkWindow: SparkWindow
+  onOpenDrawer: (row: MarketRow) => void
+  onOpenChart: (row: MarketRow) => void
+  /** Optional asset mapping for tv_symbol (from /api/links prefetch). */
+  tvSymbolFor?: (coingeckoId: string) => string | undefined
 }
 
-export function AssetRow({ asset, index, quote, sparkData }: AssetRowProps) {
-  const positive = (quote?.change24h ?? 0) >= 0;
-  const { toggle, isInWatchlist } = useWatchlist();
-  const starred = isInWatchlist(asset.id);
+export function AssetRow({
+  row,
+  index,
+  sparkWindow,
+  onOpenDrawer,
+  onOpenChart,
+  tvSymbolFor,
+}: AssetRowProps) {
+  const positive = row.change24h >= 0
+  const tvSymbol =
+    tvSymbolFor?.(row.id) ?? `BINANCE:${row.symbol || row.id.toUpperCase()}USDT`
+
+  function handleOpenDrawer() {
+    onOpenDrawer(row)
+  }
+
+  function handleOpenChart(e: React.MouseEvent) {
+    e.stopPropagation()
+    e.preventDefault()
+    warmTradingView()
+    onOpenChart(row)
+  }
+
+  function handleHover() {
+    prefetchLinks(row.id)
+    warmTradingView()
+  }
 
   return (
-    <tr className="border-b border-[var(--border)] hover:bg-[var(--surface)] group cursor-pointer h-[56px]">
-      <td className="px-4 text-[var(--text-mut)] tabular-nums">{index}</td>
-      <td className="px-4">
-        <a href={`/asset/${asset.id}`} className="flex items-center gap-3 hover:text-[var(--accent)]">
-          <div className="w-6 h-6 rounded-full bg-[var(--surface-2)]" />
-          <div>
-            <div className="font-medium flex items-center gap-1">
-              {asset.name} <span className="text-[var(--text-mut)]">↗</span>
-            </div>
-            <div className="text-xs text-[var(--text-mut)]">{asset.ticker}</div>
-          </div>
-        </a>
+    <tr
+      className="asset-row row-h border-b border-[var(--border)] hover:bg-[var(--surface)] transition-colors"
+      onMouseEnter={handleHover}
+      onClick={handleOpenDrawer}
+    >
+      <td className="px-4 text-[var(--text-mut)] tabular-nums text-sm align-middle">
+        {row.rank || index}
       </td>
-      <td className="px-4 text-right tabular-nums text-sm"><PriceCell quote={quote} /></td>
-      <td className="px-4 text-right tabular-nums text-sm text-[var(--text-mut)]">$1.28T</td>
-      <td className="px-4 text-right tabular-nums text-sm"><PriceCell quote={quote} /></td>
-      <td className="px-4 flex items-center gap-2">
+      <td className="px-4 align-middle">
+        <div className="group flex items-center gap-3 min-w-0">
+          {row.image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={row.image}
+              alt=""
+              width={28}
+              height={28}
+              className="coin w-7 h-7 rounded-full bg-[var(--surface-2)] transition-transform group-hover:scale-105"
+              loading="lazy"
+            />
+          ) : (
+            <div className="coin w-7 h-7 rounded-full bg-[var(--surface-2)]" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="asset-name text-sm truncate max-w-[16ch] sm:max-w-[24ch]">
+              {row.name}
+              <span className="asset-chevron" aria-hidden>›</span>
+            </div>
+            <div className="text-[12px] text-[var(--text-mut)] uppercase tracking-wide">{row.symbol}</div>
+          </div>
+        </div>
+      </td>
+      <td className="px-4 text-right align-middle">
+        <PriceCell price={row.price} />
+      </td>
+      <td className="px-4 text-right align-middle hidden sm:table-cell">
+        <MarketCapCell value={row.marketCap} />
+      </td>
+      <td className="px-4 text-right align-middle">
+        <ChangeCell value={row.change24h} />
+      </td>
+      <td className="px-4 align-middle hidden md:table-cell">
         <button
-          onClick={(e) => { e.stopPropagation(); toggle(asset.id); }}
-          className="text-lg"
-          aria-label={starred ? "Remove from watchlist" : "Add to watchlist"}
+          type="button"
+          onClick={handleOpenChart}
+          onMouseEnter={() => warmTradingView()}
+          className="sparkline-btn"
+          aria-label={`Open chart for ${row.symbol}`}
+          title={`Chart: ${tvSymbol}`}
         >
-          {starred ? "★" : "☆"}
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); /* open chart tab */ }}
-          className="hover:bg-[var(--surface-2)] rounded p-1"
-          aria-label={`Open chart for ${asset.ticker}`}
-        >
-          <Sparkline data={sparkData} positive={positive} />
+          <SparklineCell
+            coingeckoId={row.id}
+            defaultData={row.sparkline}
+            positive={positive}
+            window={sparkWindow}
+          />
+          <span className="sparkline-corner" aria-hidden>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 3h6v6" />
+              <path d="M10 14L21 3" />
+            </svg>
+          </span>
         </button>
       </td>
     </tr>
-  );
+  )
 }

@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query"
 import type { SparklinesResponse } from "@/lib/types"
 
+const SPARK_TTL = Number(process.env.SPARK_TTL_SECONDS ?? 300) * 1000
+
 export function useSparklines(ids: string[]) {
   const key = [...ids].sort().join(",")
   return useQuery({
@@ -10,6 +12,6 @@ export function useSparklines(ids: string[]) {
       const r = await fetch(`/api/sparklines?ids=${encodeURIComponent(key)}&window=24h`)
       return r.json()
     },
-    staleTime: 5 * 60_000,
+    staleTime: SPARK_TTL,
   })
 }

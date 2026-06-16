@@ -1,11 +1,9 @@
-import { randomBytes } from "crypto"
+// SIWE disabled for now. See /plan notes.
+// To re-enable: replace this stub with the original `siwe_nonce` set-cookie logic.
 
 export async function GET() {
-  const nonce = randomBytes(16).toString("hex")
-  return new Response(JSON.stringify({ nonce }), {
-    headers: {
-      "content-type": "application/json",
-      "set-cookie": `siwe_nonce=${nonce}; Path=/; HttpOnly; SameSite=Lax; Max-Age=300`,
-    },
+  return new Response(JSON.stringify({ error: "siwe_disabled" }), {
+    status: 503,
+    headers: { "content-type": "application/json" },
   })
 }

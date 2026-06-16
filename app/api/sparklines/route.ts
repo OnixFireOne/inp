@@ -2,8 +2,6 @@ import { NextRequest } from "next/server"
 import { kvGet, kvSetEx } from "@/lib/kv"
 import type { SparklinesResponse } from "@/lib/types"
 
-export const runtime = "edge"
-
 const BASE = process.env.COINGECKO_BASE || "https://api.coingecko.com/api/v3"
 const KEY = process.env.COINGECKO_API_KEY || ""
 const TTL = Number(process.env.SPARK_TTL_SECONDS ?? 300)
