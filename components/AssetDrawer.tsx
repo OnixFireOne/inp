@@ -1,19 +1,16 @@
 "use client"
 
-// Drawer: right-side desktop sheet, vaul bottom-sheet on mobile.
-// Renders curated links fetched from /api/links?cg=<id>.
-// Empty state when the asset isn't in our DB.
-//
-// Data fetching rules:
-//  - On open / hover, fetch /api/links?cg=... (hover = warm the cache).
-//  - Server returns { asset, links }. asset=null => empty state.
+// Drawer: Vaul bottom-sheet on mobile (<md), Radix side-panel on desktop.
+// Reads the SAME ["links", id] queryKey that AssetRow prefetched on hover
+// (see lib/prefetch.ts). One cache, both surfaces, zero extra network.
 
 import * as Dialog from "@radix-ui/react-dialog"
-// import { Drawer as VaulDrawer } from "vaul"   // disabled for now (mobile bottom-sheet)
+import { Drawer as VaulDrawer } from "vaul"
 import { useQuery } from "@tanstack/react-query"
 import { useEffect } from "react"
 import type { Asset, Link } from "@/types/asset"
 import { LinkList } from "./LinkList"
+import { linksQueryKey } from "@/lib/prefetch"
 
 interface AssetDrawerProps {
   open: boolean
@@ -35,52 +32,75 @@ async function fetchLinks(cg: string, signal: AbortSignal): Promise<LinksPayload
 }
 
 export function AssetDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerProps) {
+  return (
+    <>
+      {/* Mobile: Vaul bottom-sheet */}
+      <MobileDrawer open={open} onOpenChange={onOpenChange} coingeckoId={coingeckoId} market={market} />
+      {/* Desktop: Radix side-panel */}
+      <DesktopDrawer open={open} onOpenChange={onOpenChange} coingeckoId={coingeckoId} market={market} />
+    </>
+  )
+}
+
+function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerProps) {
   const enabled = open && !!coingeckoId
   const { data, isLoading } = useQuery({
-    queryKey: ["links", coingeckoId],
+    queryKey: coingeckoId ? linksQueryKey(coingeckoId) : ["links", "_disabled"],
     queryFn: ({ signal }) => fetchLinks(coingeckoId as string, signal),
     enabled,
     staleTime: 60_000,
   })
 
-  // ESC to close (Radix handles it; this is for Vaul fallback).
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onOpenChange(false)
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [open, onOpenChange])
+  return (
+    <VaulDrawer.Root open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
+      <VaulDrawer.Portal>
+        <VaulDrawer.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
+        <VaulDrawer.Content className="fixed bottom-0 left-0 right-0 z-[51] bg-[var(--surface)] border-t border-[var(--border)] rounded-t-2xl max-h-[85vh] flex flex-col">
+          <DrawerContent
+            isLoading={isLoading}
+            payload={data}
+            market={market}
+            onClose={() => onOpenChange(false)}
+          />
+        </VaulDrawer.Content>
+      </VaulDrawer.Portal>
+    </VaulDrawer.Root>
+  )
+}
+
+// Desktop: Radix side-panel
+function DesktopDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerProps) {
+  const enabled = open && !!coingeckoId
+  const { data, isLoading } = useQuery({
+    // Same queryKey as the mobile drawer + prefetch → shared cache, single network call.
+    queryKey: coingeckoId ? linksQueryKey(coingeckoId) : ["links", "_disabled"],
+    queryFn: ({ signal }) => fetchLinks(coingeckoId as string, signal),
+    enabled,
+    staleTime: 60_000,
+  })
 
   return (
-    <>
-      {/* Desktop drawer (Radix Dialog, non-modal — clicking another row swaps content via the table). */}
-      <div className="hidden md:block">
-        <Dialog.Root open={open} onOpenChange={onOpenChange}>
-          <Dialog.Portal>
-            <Dialog.Content
-              aria-describedby={undefined}
-              className="drawer-panel fixed right-0 top-0 z-50 h-full w-[var(--drawer-w)] max-w-[92vw] bg-[var(--surface)] border-l border-[var(--border)] shadow-2xl flex flex-col"
-            >
-              <Dialog.Title className="sr-only">
-                {market?.name || coingeckoId || "Asset overview"}
-              </Dialog.Title>
-
-              <DrawerContent
-                isLoading={isLoading}
-                payload={data}
-                market={market}
-                onClose={() => onOpenChange(false)}
-              />
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-      </div>
-
-      {/* Mobile bottom-sheet (vaul) — temporarily disabled per request */}
-      {/* <div className="md:hidden"> ... </div> */}
-    </>
+    <div className="hidden md:block">
+      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="drawer-panel fixed right-0 top-0 z-50 h-full w-[var(--drawer-w)] max-w-[92vw] bg-[var(--surface)] border-l border-[var(--border)] shadow-2xl flex flex-col"
+          >
+            <Dialog.Title className="sr-only">
+              {market?.name || coingeckoId || "Asset overview"}
+            </Dialog.Title>
+            <DrawerContent
+              isLoading={isLoading}
+              payload={data}
+              market={market}
+              onClose={() => onOpenChange(false)}
+            />
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </div>
   )
 }
 
@@ -103,6 +123,12 @@ function DrawerContent({
 
   return (
     <>
+      {/* Drag handle (mobile only) */}
+      <div className="md:hidden flex justify-center pt-3 pb-1 shrink-0">
+        <div className="w-9 h-1 bg-[var(--border)] rounded-full" />
+      </div>
+
+      {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)] shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           {icon ? (
@@ -133,7 +159,8 @@ function DrawerContent({
         </button>
       </div>
 
-      <div className="drawer-body flex-1">
+      {/* Body */}
+      <div className="drawer-body flex-1 min-h-0">
         <div className="drawer-scroll p-5">
           {isLoading ? (
             <DrawerSkeleton />

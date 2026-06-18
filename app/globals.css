@@ -54,6 +54,11 @@ pre {
   height: var(--row-h);
 }
 
+/* Row height */
+.row-h {
+  height: var(--row-h);
+}
+
 /* Icon buttons (star, chart, theme, close) */
 .icon-btn {
   display: inline-flex;

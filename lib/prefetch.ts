@@ -1,8 +1,29 @@
 // lib/prefetch.ts
-// Helper to warm the /api/links cache on row hover. Non-blocking.
+// Prefetch /api/links into the React Query cache on row hover.
+// Uses the SAME queryKey as AssetDrawer → opening the modal reads from cache, no network.
 
-export function prefetchLinks(coingeckoId: string) {
+import type { QueryClient } from "@tanstack/react-query"
+import type { Asset, Link } from "@/types/asset"
+
+interface LinksPayload {
+  asset: Pick<Asset, "id" | "name" | "ticker" | "icon" | "coingecko_id" | "tv_symbol"> | null
+  links: Link[]
+}
+
+export const linksQueryKey = (coingeckoId: string) => ["links", coingeckoId] as const
+
+async function fetchLinks(cg: string, signal: AbortSignal): Promise<LinksPayload> {
+  const r = await fetch(`/api/links?cg=${encodeURIComponent(cg)}`, { signal })
+  if (!r.ok) return { asset: null, links: [] }
+  return (await r.json()) as LinksPayload
+}
+
+export function prefetchLinks(qc: QueryClient, coingeckoId: string) {
   if (typeof window === "undefined") return
-  // Fire-and-forget. The browser will cache the GET.
-  void fetch(`/api/links?cg=${encodeURIComponent(coingeckoId)}`, { method: "GET" }).catch(() => {})
+  // Same queryKey as AssetDrawer → cache hit when the modal opens.
+  void qc.prefetchQuery({
+    queryKey: linksQueryKey(coingeckoId),
+    queryFn: ({ signal }) => fetchLinks(coingeckoId, signal),
+    staleTime: 60_000,
+  })
 }

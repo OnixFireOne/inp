@@ -18,6 +18,7 @@ export async function GET(req: NextRequest) {
   const MAX_IDS = 50
   const limitedIds = [...new Set(ids)].slice(0, MAX_IDS)
   const window = req.nextUrl.searchParams.get("window") ?? "24h"
+  const days = window === '7d' ? 7 : 1
   if (limitedIds.length === 0) return Response.json({ series: {} })
 
   const series: Record<string, number[]> = {}
@@ -28,7 +29,7 @@ export async function GET(req: NextRequest) {
   }
 
   await Promise.all(missing.map(async id => {
-    const url = `${BASE}/coins/${id}/market_chart?vs_currency=usd&days=1`
+    const url = `${BASE}/coins/${id}/market_chart?vs_currency=usd&days=${days}`
     const r = await fetch(url, { headers: getCoinGeckoHeaders() })
     if (!r.ok) { series[id] = []; return }
     const data = await r.json() as { prices: [number, number][] }

@@ -2,10 +2,11 @@
 
 // AssetRow — single market row.
 // Interactions:
-//   • Click anywhere on the row → open drawer (curated links).
-//   • Hover the asset name/icon → affordance (accent underline, brighter icon, chevron).
+//   • Hover the row → prefetchLinks (warm RQ cache with same queryKey as drawer).
+//   • Click anywhere on the row → router.push(/asset/[id]) → intercepted modal.
 //   • Click the sparkline cell → open ChartModal (stops propagation).
 
+import { useQueryClient } from "@tanstack/react-query"
 import { SparklineCell } from "./SparklineCell"
 import { PriceCell } from "./PriceCell"
 import { ChangeCell } from "./ChangeCell"
@@ -13,12 +14,12 @@ import { MarketCapCell } from "./MarketCapCell"
 import type { MarketRow, SparkWindow } from "@/lib/types"
 import { warmTradingView } from "@/components/TvChart"
 import { prefetchLinks } from "@/lib/prefetch"
+import { useRouter } from "next/navigation"
 
 interface AssetRowProps {
   row: MarketRow
   index: number
   sparkWindow: SparkWindow
-  onOpenDrawer: (row: MarketRow) => void
   onOpenChart: (row: MarketRow) => void
   /** Optional asset mapping for tv_symbol (from /api/links prefetch). */
   tvSymbolFor?: (coingeckoId: string) => string | undefined
@@ -28,16 +29,17 @@ export function AssetRow({
   row,
   index,
   sparkWindow,
-  onOpenDrawer,
   onOpenChart,
   tvSymbolFor,
 }: AssetRowProps) {
+  const router = useRouter()
+  const qc = useQueryClient()
   const positive = row.change24h >= 0
   const tvSymbol =
     tvSymbolFor?.(row.id) ?? `BINANCE:${row.symbol || row.id.toUpperCase()}USDT`
 
   function handleOpenDrawer() {
-    onOpenDrawer(row)
+    router.push(`/asset/${row.id}`)
   }
 
   function handleOpenChart(e: React.MouseEvent) {
@@ -48,13 +50,14 @@ export function AssetRow({
   }
 
   function handleHover() {
-    prefetchLinks(row.id)
+    // Warm RQ cache with the same queryKey used by AssetDrawer → instant open.
+    prefetchLinks(qc, row.id)
     warmTradingView()
   }
 
   return (
     <tr
-      className="asset-row row-h border-b border-[var(--border)] hover:bg-[var(--surface)] transition-colors"
+      className="asset-row row-h border-b border-[var(--border)] hover:bg-[var(--surface)] transition-colors cursor-pointer"
       onMouseEnter={handleHover}
       onClick={handleOpenDrawer}
     >

@@ -1,9 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { AssetRow } from "./AssetRow"
-import { AssetDrawer } from "./AssetDrawer"
 import { requestOpenChart } from "./TvChart"
 import type { MarketsResponse, MarketRow, SparkWindow } from "@/lib/types"
 import { ThemeToggle } from "./ThemeToggle"
@@ -14,26 +13,22 @@ async function fetchMarkets(page: number): Promise<MarketsResponse> {
   return r.json()
 }
 
-export function AssetTable() {
+interface AssetTableProps {
+  /** SSR-prefetched data — eliminates skeleton → data CLS shift. */
+  initialData?: MarketsResponse | null
+}
+
+export function AssetTable({ initialData }: AssetTableProps = {}) {
   const [page, setPage] = useState(1)
   const [sparkWindow, setSparkWindow] = useState<SparkWindow>("7d")
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["markets", page],
     queryFn: () => fetchMarkets(page),
+    // Use SSR prefetch as initial data; avoids skeleton flash on hydration.
+    initialData: page === 1 ? initialData ?? undefined : undefined,
     staleTime: 30_000,
   })
-
-  // Drawer
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerCg, setDrawerCg] = useState<string | null>(null)
-  const [drawerMarket, setDrawerMarket] = useState<MarketRow | null>(null)
-
-  function openDrawer(row: MarketRow) {
-    setDrawerCg(row.id)
-    setDrawerMarket(row)
-    setDrawerOpen(true)
-  }
 
   // Open the always-mounted chart panel via the global event channel.
   function openChart(row: MarketRow) {
@@ -111,11 +106,19 @@ export function AssetTable() {
               Array.from({ length: 10 }).map((_, i) => (
                 <tr key={i} className="row-h border-b border-[var(--border)]">
                   <td className="px-4"><div className="w-6 h-4 bg-[var(--surface-2)] rounded animate-pulse" /></td>
-                  <td className="px-4"><div className="flex gap-3"><div className="w-7 h-7 bg-[var(--surface-2)] rounded-full animate-pulse" /><div className="space-y-1"><div className="w-24 h-4 bg-[var(--surface-2)] rounded animate-pulse" /><div className="w-10 h-3 bg-[var(--surface-2)] rounded animate-pulse" /></div></div></td>
+                  <td className="px-4">
+                    <div className="flex gap-3 items-center h-full">
+                      <div className="w-7 h-7 bg-[var(--surface-2)] rounded-full animate-pulse shrink-0" />
+                      <div className="space-y-1">
+                        <div className="w-24 h-4 bg-[var(--surface-2)] rounded animate-pulse" />
+                        <div className="w-10 h-3 bg-[var(--surface-2)] rounded animate-pulse" />
+                      </div>
+                    </div>
+                  </td>
                   <td className="px-4 text-right"><div className="w-20 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>
                   <td className="px-4 text-right hidden sm:table-cell"><div className="w-16 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>
                   <td className="px-4 text-right"><div className="w-14 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>
-                  <td className="px-4 hidden md:table-cell"><div className="w-24 h-7 bg-[var(--surface-2)] rounded animate-pulse" /></td>
+                  <td className="px-4 hidden md:table-cell"><div className="w-24 h-8 bg-[var(--surface-2)] rounded animate-pulse" /></td>
                 </tr>
               ))
             ) : isError ? (
@@ -133,7 +136,6 @@ export function AssetTable() {
                   row={row}
                   index={(page - 1) * (data?.perPage ?? 100) + idx + 1}
                   sparkWindow={sparkWindow}
-                  onOpenDrawer={openDrawer}
                   onOpenChart={openChart}
                 />
               ))
@@ -162,25 +164,6 @@ export function AssetTable() {
           </button>
         </div>
       </div>
-
-      {/* Drawer */}
-      <AssetDrawer
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
-        coingeckoId={drawerCg}
-        market={
-          drawerMarket
-            ? {
-                name: drawerMarket.name,
-                symbol: drawerMarket.symbol,
-                image: drawerMarket.image,
-                price: drawerMarket.price,
-                change24h: drawerMarket.change24h,
-                marketCap: drawerMarket.marketCap,
-              }
-            : undefined
-        }
-      />
 
     </div>
   )
