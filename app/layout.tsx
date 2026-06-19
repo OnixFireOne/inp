@@ -22,7 +22,7 @@ export default function RootLayout({
   modal: React.ReactNode;
 }) {
   return (
-    <html lang="en" data-theme="dark">
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
         {/* TradingView warmup: open TCP/TLS + DNS early so the chart loads fast. */}
         <link rel="preconnect" href="https://s.tradingview.com" crossOrigin="" />

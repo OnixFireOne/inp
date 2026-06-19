@@ -7,10 +7,22 @@
 import * as Dialog from "@radix-ui/react-dialog"
 import { Drawer as VaulDrawer } from "vaul"
 import { useQuery } from "@tanstack/react-query"
-import { useEffect } from "react"
+import { useSyncExternalStore } from "react"
 import type { Asset, Link } from "@/types/asset"
 import { LinkList } from "./LinkList"
 import { linksQueryKey } from "@/lib/prefetch"
+
+function useIsDesktop() {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      const mq = window.matchMedia("(min-width:768px)")
+      mq.addEventListener("change", onStoreChange)
+      return () => mq.removeEventListener("change", onStoreChange)
+    },
+    () => window.matchMedia("(min-width:768px)").matches,
+    () => false, // server snapshot — no window available
+  )
+}
 
 interface AssetDrawerProps {
   open: boolean
@@ -32,14 +44,11 @@ async function fetchLinks(cg: string, signal: AbortSignal): Promise<LinksPayload
 }
 
 export function AssetDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerProps) {
-  return (
-    <>
-      {/* Mobile: Vaul bottom-sheet */}
-      <MobileDrawer open={open} onOpenChange={onOpenChange} coingeckoId={coingeckoId} market={market} />
-      {/* Desktop: Radix side-panel */}
-      <DesktopDrawer open={open} onOpenChange={onOpenChange} coingeckoId={coingeckoId} market={market} />
-    </>
-  )
+  const isDesktop = useIsDesktop()
+  if (isDesktop) {
+    return <DesktopDrawer open={open} onOpenChange={onOpenChange} coingeckoId={coingeckoId} market={market} />
+  }
+  return <MobileDrawer open={open} onOpenChange={onOpenChange} coingeckoId={coingeckoId} market={market} />
 }
 
 function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerProps) {
@@ -55,7 +64,13 @@ function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerPr
     <VaulDrawer.Root open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
       <VaulDrawer.Portal>
         <VaulDrawer.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
-        <VaulDrawer.Content className="fixed bottom-0 left-0 right-0 z-[51] bg-[var(--surface)] border-t border-[var(--border)] rounded-t-2xl max-h-[85vh] flex flex-col">
+        <VaulDrawer.Content
+          aria-describedby={undefined}
+          className="fixed bottom-0 left-0 right-0 z-[51] bg-[var(--surface)] border-t border-[var(--border)] rounded-t-2xl max-h-[85vh] flex flex-col"
+        >
+          <VaulDrawer.Title className="sr-only">
+            {market?.name || coingeckoId || "Asset overview"}
+          </VaulDrawer.Title>
           <DrawerContent
             isLoading={isLoading}
             payload={data}
