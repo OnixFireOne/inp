@@ -97,12 +97,13 @@ function DesktopDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerP
 
   return (
     <div className="hidden md:block">
-      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Root open={open} onOpenChange={onOpenChange} modal={false}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-transparent" />
           <Dialog.Content
             aria-describedby={undefined}
             onOpenAutoFocus={(e) => e.preventDefault()}
+            onInteractOutside={(e) => e.preventDefault()}
+            onPointerDownOutside={(e) => e.preventDefault()}
             className="drawer-panel fixed right-0 top-0 z-50 h-full w-[var(--drawer-w)] max-w-[92vw] bg-[var(--surface)] border-l border-[var(--border)] shadow-2xl flex flex-col"
           >
             <Dialog.Title className="sr-only">
