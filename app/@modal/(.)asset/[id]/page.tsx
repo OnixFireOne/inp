@@ -12,8 +12,8 @@
 
 import { AssetDrawer } from "@/components/AssetDrawer"
 import { use, useEffect } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { linksQueryKey, prefetchLinks, marketRowQueryKey } from "@/lib/prefetch"
+import { useQueryClient } from "@tanstack/react-query"
+import { prefetchLinks, marketRowQueryKey } from "@/lib/prefetch"
 import type { MarketRow } from "@/lib/types"
 
 interface AssetModalPageProps {
@@ -24,12 +24,7 @@ export default function AssetModalPage({ params }: AssetModalPageProps) {
   const { id } = use(params)
   const qc = useQueryClient()
 
-  // Read the stashed row for instant header display (icon + name + symbol).
-  const { data: marketRow } = useQuery<MarketRow>({
-    queryKey: marketRowQueryKey(id),
-    enabled: false,
-  })
-
+  const marketRow = qc.getQueryData<MarketRow>(marketRowQueryKey(id))
   const market = marketRow ?? undefined
 
   // On mount: ensure the cache is warm (no-op if already prefetched on hover).

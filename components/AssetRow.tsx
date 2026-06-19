@@ -14,7 +14,7 @@ import { MarketCapCell } from "./MarketCapCell"
 import type { MarketRow, SparkWindow } from "@/lib/types"
 import { warmTradingView } from "@/components/TvChart"
 import { prefetchLinks, stashMarketRow } from "@/lib/prefetch"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname } from "next/navigation"
 
 interface AssetRowProps {
   row: MarketRow
@@ -33,6 +33,7 @@ export function AssetRow({
   tvSymbolFor,
 }: AssetRowProps) {
   const router = useRouter()
+  const pathname = usePathname()
   const qc = useQueryClient()
   const positive = row.change24h >= 0
   const tvSymbol =
@@ -40,7 +41,11 @@ export function AssetRow({
 
   function handleOpenDrawer() {
     stashMarketRow(qc, row)
-    router.push(`/asset/${row.id}`, { scroll: false })
+    if (pathname?.startsWith("/asset/")) {
+      router.replace(`/asset/${row.id}`, { scroll: false })
+    } else {
+      router.push(`/asset/${row.id}`, { scroll: false })
+    }
   }
 
   function handleOpenChart(e: React.MouseEvent) {
