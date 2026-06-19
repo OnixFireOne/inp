@@ -12,8 +12,9 @@
 
 import { AssetDrawer } from "@/components/AssetDrawer"
 import { use, useEffect } from "react"
-import { useQueryClient } from "@tanstack/react-query"
-import { linksQueryKey, prefetchLinks } from "@/lib/prefetch"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { linksQueryKey, prefetchLinks, marketRowQueryKey } from "@/lib/prefetch"
+import type { MarketRow } from "@/lib/types"
 
 interface AssetModalPageProps {
   params: Promise<{ id: string }>
@@ -22,6 +23,14 @@ interface AssetModalPageProps {
 export default function AssetModalPage({ params }: AssetModalPageProps) {
   const { id } = use(params)
   const qc = useQueryClient()
+
+  // Read the stashed row for instant header display (icon + name + symbol).
+  const { data: marketRow } = useQuery<MarketRow>({
+    queryKey: marketRowQueryKey(id),
+    enabled: false,
+  })
+
+  const market = marketRow ?? undefined
 
   // On mount: ensure the cache is warm (no-op if already prefetched on hover).
   useEffect(() => {
@@ -37,6 +46,7 @@ export default function AssetModalPage({ params }: AssetModalPageProps) {
       open={true}
       onOpenChange={(o) => { if (!o) handleClose() }}
       coingeckoId={id}
+      market={market}
     />
   )
 }

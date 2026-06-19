@@ -66,6 +66,7 @@ function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerPr
         <VaulDrawer.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
         <VaulDrawer.Content
           aria-describedby={undefined}
+          onOpenAutoFocus={(e) => e.preventDefault()}
           className="fixed bottom-0 left-0 right-0 z-[51] bg-[var(--surface)] border-t border-[var(--border)] rounded-t-2xl max-h-[85vh] flex flex-col"
         >
           <VaulDrawer.Title className="sr-only">
@@ -98,9 +99,10 @@ function DesktopDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerP
     <div className="hidden md:block">
       <Dialog.Root open={open} onOpenChange={onOpenChange}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-transparent" />
           <Dialog.Content
             aria-describedby={undefined}
+            onOpenAutoFocus={(e) => e.preventDefault()}
             className="drawer-panel fixed right-0 top-0 z-50 h-full w-[var(--drawer-w)] max-w-[92vw] bg-[var(--surface)] border-l border-[var(--border)] shadow-2xl flex flex-col"
           >
             <Dialog.Title className="sr-only">

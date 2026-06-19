@@ -13,7 +13,7 @@ import { ChangeCell } from "./ChangeCell"
 import { MarketCapCell } from "./MarketCapCell"
 import type { MarketRow, SparkWindow } from "@/lib/types"
 import { warmTradingView } from "@/components/TvChart"
-import { prefetchLinks } from "@/lib/prefetch"
+import { prefetchLinks, stashMarketRow } from "@/lib/prefetch"
 import { useRouter } from "next/navigation"
 
 interface AssetRowProps {
@@ -39,7 +39,8 @@ export function AssetRow({
     tvSymbolFor?.(row.id) ?? `BINANCE:${row.symbol || row.id.toUpperCase()}USDT`
 
   function handleOpenDrawer() {
-    router.push(`/asset/${row.id}`)
+    stashMarketRow(qc, row)
+    router.push(`/asset/${row.id}`, { scroll: false })
   }
 
   function handleOpenChart(e: React.MouseEvent) {
@@ -51,6 +52,7 @@ export function AssetRow({
 
   function handleHover() {
     // Warm RQ cache with the same queryKey used by AssetDrawer → instant open.
+    stashMarketRow(qc, row)
     prefetchLinks(qc, row.id)
     warmTradingView()
   }
