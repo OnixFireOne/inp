@@ -4,13 +4,34 @@
 //
 // Uses Refine v5 hooks:
 //   - useList({ resource: "links", filters: permanent asset_id eq })
-//   - useList({ resource: "link_categories" }) — dynamic, replaces hardcoded CATEGORIES
+//   - useList({ resource: "link_categories" }) — dynamic category list
 //   - useCreate / useUpdate / useDelete for inline edits
 //
-// Each row: name, description, href, tier, category, is_top, manual_rank,
-// health, icon. Favicon as fallback when icon is not set.
+// Drag-and-drop reorder (@dnd-kit/sortable) rewrites manual_rank in bulk
+// after a drop. manual_rank is also exposed as a manual number fallback.
+//
+// Tier values: "Core" and "Trusted" (External tier was removed).
 import { useState, useMemo } from "react"
-import { useList, useCreate, useUpdate, useDelete, type CrudFilter } from "@refinedev/core"
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
+import { useList, useCreate, useUpdate, useDelete, useUpdateMany, type CrudFilter } from "@refinedev/core"
+import { useQueryClient } from "@tanstack/react-query"
+import { linksQueryKey } from "@/lib/prefetch"
 import { faviconUrl } from "@/lib/admin/favicon"
 
 type LinkRow = {
@@ -34,10 +55,10 @@ type Category = {
   sort: number
 }
 
-const TIERS = ["Core", "Trusted", "External"]
+const TIERS = ["Core", "Trusted"]
 const HEALTH = ["alive", "broken", "unknown"]
 
-export function LinksEditor({ assetId }: { assetId: string }) {
+export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingeckoId?: string }) {
   // --- categories from DB ---
   const catQuery = useList<Category>({
     resource: "link_categories",
@@ -65,25 +86,89 @@ export function LinksEditor({ assetId }: { assetId: string }) {
 
   const create = useCreate()
   const update = useUpdate()
+  const updateMany = useUpdateMany()
   const remove = useDelete()
+
+  const queryClient = useQueryClient()
 
   const [editing, setEditing] = useState<Partial<LinkRow> | null>(null)
 
-  // Category filter state (client-side, no extra query)
+  // After ANY mutation to the links table, drop the server-side cache for
+  // /api/links?cg=<id> (the in-memory kv lives in the Node process) and
+  // invalidate the browser-side RQ cache so the showcase refetches.
+  async function revalidate() {
+    if (!coingeckoId) return
+    try {
+      await fetch("/api/admin/revalidate-links", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cg: coingeckoId }),
+        cache: "no-store",
+      })
+    } catch { /* best-effort */ }
+    queryClient.invalidateQueries({ queryKey: linksQueryKey(coingeckoId) })
+    // Also invalidate any asset-page payload that included this row set
+    queryClient.invalidateQueries({ queryKey: ["links", coingeckoId] })
+  }
+
+  // Local mirror of rows for optimistic drag preview
+  const [localRows, setLocalRows] = useState<LinkRow[] | null>(null)
+  const rows: LinkRow[] = useMemo(() => {
+    if (!localRows) return allRows
+    // Reconcile with allRows (Refine refetch might give new objects)
+    const byId = new Map(allRows.map((r) => [r.id, r]))
+    return localRows.map((r) => byId.get(r.id) ?? r)
+  }, [allRows, localRows])
+
+  // Category filter (client-side)
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
-  const rows = useMemo(
-    () => (activeCategory ? allRows.filter((r) => r.category === activeCategory) : allRows),
-    [allRows, activeCategory],
+  const visibleRows = useMemo(
+    () => (activeCategory ? rows.filter((r) => r.category === activeCategory) : rows),
+    [rows, activeCategory],
   )
 
-  // Category counts (over unfiltered set)
+  // Category counts (over full set)
   const catCounts = useMemo(() => {
     const m = new Map<string, number>()
-    for (const r of allRows) {
-      m.set(r.category, (m.get(r.category) ?? 0) + 1)
-    }
+    for (const r of rows) m.set(r.category, (m.get(r.category) ?? 0) + 1)
     return m
-  }, [allRows])
+  }, [rows])
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  async function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    const oldIndex = visibleRows.findIndex((r) => r.id === active.id)
+    const newIndex = visibleRows.findIndex((r) => r.id === over.id)
+    if (oldIndex < 0 || newIndex < 0) return
+
+    const reordered = arrayMove(visibleRows, oldIndex, newIndex)
+    // Recompute full row list: replace only the visible subset
+    const fullReordered: LinkRow[] = activeCategory
+      ? (() => {
+          const others = rows.filter((r) => r.category !== activeCategory)
+          return [...others, ...reordered]
+        })()
+      : reordered
+
+    setLocalRows(fullReordered)
+
+    // Bulk rewrite manual_rank: 10, 20, 30...
+    try {
+      await updateMany.mutateAsync({
+        resource: "links",
+        ids: reordered.map((r) => r.id),
+        values: reordered.map((r, i) => ({ id: r.id, manual_rank: (i + 1) * 10 })) as never,
+      })
+      await revalidate()
+    } finally {
+      setLocalRows(null)
+    }
+  }
 
   async function submit() {
     if (!editing) return
@@ -105,12 +190,14 @@ export function LinksEditor({ assetId }: { assetId: string }) {
     } else {
       await create.mutateAsync({ resource: "links", values: payload })
     }
+    await revalidate()
     setEditing(null)
   }
 
   async function onDelete(id: string) {
     if (!confirm("Удалить ссылку?")) return
     await remove.mutateAsync({ resource: "links", id })
+    await revalidate()
   }
 
   return (
@@ -119,7 +206,7 @@ export function LinksEditor({ assetId }: { assetId: string }) {
         <h3 className="font-medium">Ссылки ({rows.length})</h3>
         <button
           onClick={() => setEditing({ asset_id: assetId, tier: "Trusted", category: "tools", health: "alive", is_top: false })}
-          className="px-3 py-1.5 rounded border text-sm"
+          className="px-3 py-1.5 rounded border text-sm cursor-pointer"
         >
           + Добавить ссылку
         </button>
@@ -129,15 +216,15 @@ export function LinksEditor({ assetId }: { assetId: string }) {
       <div className="flex flex-wrap gap-1.5">
         <button
           onClick={() => setActiveCategory(null)}
-          className={`px-2.5 py-1 text-xs rounded border ${!activeCategory ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-[var(--text)]"}`}
+          className={`px-2.5 py-1 text-xs rounded border cursor-pointer ${!activeCategory ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-[var(--text)]"}`}
         >
-          Все <span className="text-[var(--text-mut)]">({allRows.length})</span>
+          Все <span className="text-[var(--text-mut)]">({rows.length})</span>
         </button>
         {categories.map((cat) => (
           <button
             key={cat.key}
             onClick={() => setActiveCategory(activeCategory === cat.key ? null : cat.key)}
-            className={`px-2.5 py-1 text-xs rounded border ${activeCategory === cat.key ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-[var(--text)]"}`}
+            className={`px-2.5 py-1 text-xs rounded border cursor-pointer ${activeCategory === cat.key ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-[var(--text)]"}`}
           >
             {cat.icon ? `${cat.icon} ` : ""}{cat.label}
             {catCounts.get(cat.key) != null && (
@@ -149,34 +236,27 @@ export function LinksEditor({ assetId }: { assetId: string }) {
 
       {err?.message && <div className="text-sm text-rose-600">{err.message}</div>}
 
-      <div className="border rounded divide-y">
-        {query.isLoading && (
-          <div className="px-3 py-3 text-sm text-[var(--text-mut)]">загрузка…</div>
-        )}
-        {!query.isLoading && rows.length === 0 && (
-          <div className="px-3 py-3 text-sm text-[var(--text-mut)]">пусто</div>
-        )}
-        {rows.map((r) => {
-          const cat = categoryMap.get(r.category)
-          const imgSrc = r.icon ?? faviconUrl(r.href)
-          return (
-            <div key={r.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-              {imgSrc && <img src={imgSrc} alt="" className="w-4 h-4" />}
-              <div className="flex-1 min-w-0">
-                <div className="truncate font-medium">{r.name}</div>
-                <div className="truncate text-xs text-[var(--text-mut)]">{r.href}</div>
-              </div>
-              <span className="text-xs px-1.5 py-0.5 rounded border">{r.tier}</span>
-              <span className="text-xs px-1.5 py-0.5 rounded border text-[var(--text-mut)]">
-                {cat ? `${cat.icon ?? ""} ${cat.label}` : r.category}
-              </span>
-              {r.is_top && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-200/40">top</span>}
-              <button onClick={() => setEditing(r)} className="text-xs text-[var(--text-mut)] hover:underline">ред.</button>
-              <button onClick={() => onDelete(r.id)} className="text-xs text-rose-600 hover:underline">×</button>
-            </div>
-          )
-        })}
-      </div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+        <SortableContext items={visibleRows.map((r) => r.id)} strategy={verticalListSortingStrategy}>
+          <div className="border rounded divide-y">
+            {query.isLoading && (
+              <div className="px-3 py-3 text-sm text-[var(--text-mut)]">загрузка…</div>
+            )}
+            {!query.isLoading && visibleRows.length === 0 && (
+              <div className="px-3 py-3 text-sm text-[var(--text-mut)]">пусто</div>
+            )}
+            {visibleRows.map((r) => (
+              <SortableRow
+                key={r.id}
+                row={r}
+                category={categoryMap.get(r.category)}
+                onEdit={() => setEditing(r)}
+                onDelete={() => onDelete(r.id)}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
 
       {editing && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
@@ -223,12 +303,71 @@ export function LinksEditor({ assetId }: { assetId: string }) {
               </Field>
             </div>
             <div className="flex gap-2 pt-2">
-              <button onClick={submit} className="px-3 py-1.5 rounded border bg-foreground text-background text-sm">Сохранить</button>
-              <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded border text-sm">Отмена</button>
+              <button onClick={submit} className="px-3 py-1.5 rounded border bg-foreground text-background text-sm cursor-pointer">Сохранить</button>
+              <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded border text-sm cursor-pointer">Отмена</button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function SortableRow({
+  row,
+  category,
+  onEdit,
+  onDelete,
+}: {
+  row: LinkRow
+  category: Category | undefined
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.id })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  }
+
+  const imgSrc = row.icon ?? faviconUrl(row.href)
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="flex items-center gap-3 px-3 py-2 text-sm bg-[var(--surface)]"
+    >
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        className="text-[var(--text-mut)] hover:text-[var(--text)] cursor-grab active:cursor-grabbing touch-none"
+        aria-label="Перетащить"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="9" cy="6" r="1" /><circle cx="9" cy="12" r="1" /><circle cx="9" cy="18" r="1" />
+          <circle cx="15" cy="6" r="1" /><circle cx="15" cy="12" r="1" /><circle cx="15" cy="18" r="1" />
+        </svg>
+      </button>
+      {imgSrc && <img src={imgSrc} alt="" className="w-4 h-4" />}
+      <div className="flex-1 min-w-0">
+        <div className="truncate font-medium">{row.name}</div>
+        <div className="truncate text-xs text-[var(--text-mut)]">{row.href}</div>
+      </div>
+      <span className="text-xs px-1.5 py-0.5 rounded border">{row.tier}</span>
+      <span className="text-xs px-1.5 py-0.5 rounded border text-[var(--text-mut)]">
+        {category ? `${category.icon ?? ""} ${category.label}` : row.category}
+      </span>
+      {row.is_top && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-200/40">top</span>}
+      <button onClick={onEdit} className="text-xs text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer" aria-label="Редактировать">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+      </button>
+      <button onClick={onDelete} className="text-xs text-rose-600 hover:text-rose-500 cursor-pointer">×</button>
     </div>
   )
 }

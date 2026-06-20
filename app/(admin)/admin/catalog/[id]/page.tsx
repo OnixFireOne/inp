@@ -62,7 +62,7 @@ export default function CatalogAssetPage() {
         <header className="mb-4 flex items-center gap-2">
           <button
             onClick={() => router.push("/admin/catalog")}
-            className="text-sm text-[var(--text-mut)] hover:underline"
+            className="text-sm text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer"
           >
             ← к каталогу
           </button>

@@ -35,11 +35,12 @@ interface AssetDrawerProps {
 interface LinksPayload {
   asset: Pick<Asset, "id" | "name" | "ticker" | "icon" | "coingecko_id" | "tv_symbol"> | null
   links: Link[]
+  categories: { key: string; label: string; icon: string | null; sort: number }[]
 }
 
 async function fetchLinks(cg: string, signal: AbortSignal): Promise<LinksPayload> {
   const r = await fetch(`/api/links?cg=${encodeURIComponent(cg)}`, { signal })
-  if (!r.ok) return { asset: null, links: [] }
+  if (!r.ok) return { asset: null, links: [], categories: [] }
   return (await r.json()) as LinksPayload
 }
 
@@ -75,6 +76,7 @@ function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerPr
           <AssetOverview
             asset={data?.asset ?? null}
             links={data?.links ?? []}
+            categories={data?.categories}
             market={market}
             isLoading={isLoading}
             variant="drawer"

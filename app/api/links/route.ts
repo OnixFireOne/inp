@@ -10,29 +10,42 @@ import { kvGet, kvSetEx } from "@/lib/kv"
 import { supabaseServer } from "@/lib/supabase/server"
 import type { Asset, Link } from "@/types/asset"
 
+interface CategoryMeta {
+  key: string
+  label: string
+  icon: string | null
+  sort: number
+}
+
 const TTL = Number(process.env.LINKS_TTL_SECONDS ?? 60)
 
 export async function GET(req: NextRequest) {
   const cg = (req.nextUrl.searchParams.get("cg") ?? "").trim()
-  if (!cg) return json({ asset: null, links: [] })
+  if (!cg) return json({ asset: null, links: [], categories: [] })
 
   const cacheKey = `links:${cg}`
-  const cached = await kvGet<{ asset: Asset | null; links: Link[] }>(cacheKey)
+  const cached = await kvGet<{ asset: Asset | null; links: Link[]; categories: CategoryMeta[] }>(cacheKey)
   if (cached) return json(cached)
 
   const supabase = await supabaseServer()
 
-  const { data: asset, error: assetErr } = await supabase
-    .from("assets")
-    .select("id, name, ticker, icon, coingecko_id, tv_symbol")
-    .eq("coingecko_id", cg)
-    .maybeSingle()
+  const [{ data: asset, error: assetErr }, { data: categories, error: catErr }] = await Promise.all([
+    supabase
+      .from("assets")
+      .select("id, name, ticker, icon, coingecko_id, tv_symbol")
+      .eq("coingecko_id", cg)
+      .maybeSingle(),
+    supabase
+      .from("link_categories")
+      .select("key, label, icon, sort")
+      .order("sort", { ascending: true }),
+  ])
 
   if (assetErr) {
-    return json({ asset: null, links: [] })
+    return json({ asset: null, links: [], categories: [] })
   }
   if (!asset) {
-    const empty = { asset: null, links: [] as Link[] }
+    const empty = { asset: null, links: [] as Link[], categories: [] as CategoryMeta[] }
     await kvSetEx(cacheKey, TTL, empty)
     return json(empty)
   }
@@ -47,10 +60,14 @@ export async function GET(req: NextRequest) {
     .order("ai_score", { ascending: false, nullsFirst: false })
 
   if (linksErr) {
-    return json({ asset, links: [] })
+    return json({ asset, links: [], categories: categories ?? [] })
   }
 
-  const payload = { asset, links: (links ?? []) as Link[] }
+  const payload = {
+    asset,
+    links: (links ?? []) as Link[],
+    categories: (categories ?? []) as CategoryMeta[],
+  }
   await kvSetEx(cacheKey, TTL, payload)
   return json(payload)
 }

@@ -25,6 +25,7 @@ interface AssetRow {
 interface LinksPayload {
   asset: Pick<AssetRow, "id" | "name" | "ticker" | "icon" | "coingecko_id" | "tv_symbol"> | null
   links: Link[]
+  categories: { key: string; label: string; icon: string | null; sort: number }[]
 }
 
 interface PageProps {
@@ -45,7 +46,7 @@ async function fetchAll(baseUrl: string, id: string) {
 
   const linksPayload: LinksPayload = linksRes.ok
     ? await linksRes.json()
-    : { asset: null, links: [] }
+    : { asset: null, links: [], categories: [] }
 
   const marketsPayload: { rows: MarketRowMinimal[] } = marketRes.ok
     ? await marketRes.json()
@@ -53,7 +54,9 @@ async function fetchAll(baseUrl: string, id: string) {
 
   return {
     asset: assetRes.data ?? null,
-    links: linksPayload,
+    describedAsset: linksPayload.asset ?? null,
+    links: linksPayload.links ?? [],
+    categories: linksPayload.categories ?? [],
     marketRow: marketsPayload.rows?.[0] ?? null,
   }
 }
@@ -79,7 +82,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       .eq("coingecko_id", id)
       .maybeSingle<{ id: string; name: string; ticker: string; icon: string | null; coingecko_id: string }>(),
     fetch(`${baseUrl}/api/links?cg=${encodeURIComponent(id)}`, { next: { revalidate: 60 } }).then((r) =>
-      r.ok ? (r.json() as Promise<LinksPayload>) : { asset: null, links: [] },
+      r.ok ? (r.json() as Promise<LinksPayload>) : { asset: null, links: [], categories: [] },
     ),
     fetch(`${baseUrl}/api/markets?ids=${encodeURIComponent(id)}`, { next: { revalidate: 45 } }).then((r) =>
       r.ok ? (r.json() as Promise<{ rows: MarketRowMinimal[] }>) : { rows: [] },
@@ -118,7 +121,7 @@ export default async function AssetPage({ params }: PageProps) {
   const { id } = await params
   const baseUrl = SITE_URL
 
-  const [{ asset, links, marketRow }, marketsHome] = await Promise.all([
+  const [{ asset, describedAsset, links, categories, marketRow }, marketsHome] = await Promise.all([
     fetchAll(baseUrl, id),
     fetch(`${baseUrl}/api/markets?page=1`, { next: { revalidate: 30 } })
       .then((r) => (r.ok ? (r.json() as Promise<MarketsResponse>) : null))
@@ -181,8 +184,9 @@ export default async function AssetPage({ params }: PageProps) {
           </header>
 
           <AssetOverview
-            asset={links.asset ?? asset}
-            links={links.links ?? []}
+            asset={describedAsset ?? asset}
+            links={links}
+            categories={categories}
             market={market}
             variant="page"
           />

@@ -76,3 +76,22 @@ export async function kvSetEx<T>(key: string, ttlSeconds: number, value: T): Pro
     } catch { /* best-effort */ }
   }
 }
+
+// Invalidate one key across both backends.
+// Server-side only — the in-memory map lives in the Node process and can't
+// be reached from the browser.
+export async function kvDel(key: string): Promise<void> {
+  memCache.delete(key)
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+    try {
+      await fetch(
+        `${process.env.KV_REST_API_URL}/del/${encodeURIComponent(key)}`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` },
+          cache: "no-store",
+        }
+      )
+    } catch { /* best-effort */ }
+  }
+}

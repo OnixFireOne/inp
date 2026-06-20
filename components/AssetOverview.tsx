@@ -29,10 +29,18 @@ export interface AssetOverviewAsset {
   tv_symbol?: string | null
 }
 
+export interface CategoryMeta {
+  key: string
+  label: string
+  icon: string | null
+  sort: number
+}
+
 interface AssetOverviewProps {
   asset: AssetOverviewAsset | null
   links: Link[]
   market?: AssetOverviewMarket
+  categories?: CategoryMeta[]
   isLoading?: boolean
   variant: "drawer" | "page"
   onClose?: () => void
@@ -42,6 +50,7 @@ export function AssetOverview({
   asset,
   links,
   market,
+  categories,
   isLoading = false,
   variant,
   onClose,
@@ -98,7 +107,7 @@ export function AssetOverview({
           ) : links.length === 0 ? (
             <EmptyState />
           ) : (
-            <LinkList links={links} />
+            <LinkList links={links} categories={categories} />
           )}
         </div>
       </div>

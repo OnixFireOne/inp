@@ -159,7 +159,7 @@ export function AssetEditor({
 
       {isEdit && (
         <section className="border-t pt-4">
-          <LinksEditor assetId={existing!.id} />
+          <LinksEditor assetId={existing!.id} coingeckoId={existing!.coingecko_id ?? market.id} />
         </section>
       )}
     </form>

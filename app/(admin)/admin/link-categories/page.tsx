@@ -57,7 +57,7 @@ export default function LinkCategoriesPage() {
           <div>
             <button
               onClick={() => router.push("/admin/catalog")}
-              className="text-sm text-[var(--text-mut)] hover:underline mb-1"
+              className="text-sm text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer mb-1"
             >
               ← Каталог
             </button>
@@ -103,8 +103,13 @@ export default function LinkCategoriesPage() {
                   <td className="px-3 py-2">{r.label}</td>
                   <td className="px-3 py-2 text-[var(--text-mut)]">{r.icon ?? "—"}</td>
                   <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(r)} className="text-xs text-[var(--text-mut)] hover:underline mr-2">ред.</button>
-                    <button onClick={() => onDelete(r.key)} className="text-xs text-rose-600 hover:underline">×</button>
+                    <button onClick={() => setEditing(r)} className="text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer mr-2" aria-label="Редактировать">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                    </button>
+                    <button onClick={() => onDelete(r.key)} className="text-xs text-rose-600 hover:text-rose-500 cursor-pointer">×</button>
                   </td>
                 </tr>
               ))}
