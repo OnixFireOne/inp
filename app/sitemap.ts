@@ -7,15 +7,10 @@
 
 import type { MetadataRoute } from "next"
 import { supabaseServer } from "@/lib/supabase/server"
-
-function resolveBaseUrl() {
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
-  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL
-  return "http://localhost:3000"
-}
+import { SITE_URL } from "@/lib/site"
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const baseUrl = resolveBaseUrl()
+  const baseUrl = SITE_URL
   const supabase = await supabaseServer()
 
   const { data, error } = await supabase

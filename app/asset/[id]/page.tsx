@@ -11,6 +11,7 @@ import { AssetTable } from "@/components/AssetTable"
 import type { MarketsResponse } from "@/lib/types"
 import type { Link } from "@/types/asset"
 import { supabaseServer } from "@/lib/supabase/server"
+import { SITE_URL } from "@/lib/site"
 
 interface AssetRow {
   id: string
@@ -67,15 +68,9 @@ type MarketRowMinimal = {
   change24h: number
 }
 
-function resolveBaseUrl() {
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
-  if (process.env.NEXT_PUBLIC_SITE_URL) return process.env.NEXT_PUBLIC_SITE_URL
-  return "http://localhost:3000"
-}
-
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params
-  const baseUrl = resolveBaseUrl()
+  const baseUrl = SITE_URL
 
   const [{ data: asset }, linksRes, marketRes] = await Promise.all([
     (await supabaseServer())
@@ -121,7 +116,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function AssetPage({ params }: PageProps) {
   const { id } = await params
-  const baseUrl = resolveBaseUrl()
+  const baseUrl = SITE_URL
 
   const [{ asset, links, marketRow }, marketsHome] = await Promise.all([
     fetchAll(baseUrl, id),

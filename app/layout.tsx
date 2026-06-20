@@ -2,10 +2,12 @@ import type { Metadata } from 'next';
 import { Providers } from '@/components/Providers';
 import './globals.css';
 import { Suspense } from 'react';
+import { SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: 'inp.one',
   description: 'Cryptocurrency catalog',
+  metadataBase: new URL(SITE_URL),
 };
 
 // Parallel route slots:
