@@ -1,0 +1,8 @@
+{
+	email you@inp.one
+}
+
+inp.one, www.inp.one {
+	encode zstd gzip
+	reverse_proxy web:3000
+}

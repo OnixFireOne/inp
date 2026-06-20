@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.github
+*.md
+Dockerfile
+docker-compose.yml
+Caddyfile
+.env*
+import-result.json
+npm-debug.log*
