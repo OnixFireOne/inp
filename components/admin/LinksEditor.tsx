@@ -29,7 +29,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { useList, useCreate, useUpdate, useDelete, useUpdateMany, type CrudFilter } from "@refinedev/core"
+import { useList, useCreate, useUpdate, useDelete, type CrudFilter } from "@refinedev/core"
 import { useQueryClient } from "@tanstack/react-query"
 import { linksQueryKey } from "@/lib/prefetch"
 import { faviconUrl } from "@/lib/admin/favicon"
@@ -86,7 +86,6 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
 
   const create = useCreate()
   const update = useUpdate()
-  const updateMany = useUpdateMany()
   const remove = useDelete()
 
   const queryClient = useQueryClient()
@@ -157,17 +156,18 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
 
     setLocalRows(fullReordered)
 
-    // Bulk rewrite manual_rank: 10, 20, 30...
-    try {
-      await updateMany.mutateAsync({
-        resource: "links",
-        ids: reordered.map((r) => r.id),
-        values: reordered.map((r, i) => ({ id: r.id, manual_rank: (i + 1) * 10 })) as never,
-      })
-      await revalidate()
-    } finally {
-      setLocalRows(null)
-    }
+    // Bulk rewrite manual_rank: 10, 20, 30... via individual row updates.
+    // (useUpdateMany applies one values object to ALL rows — doesn't support per-row values.)
+    await Promise.all(
+      reordered.map((r, i) =>
+        update.mutateAsync({
+          resource: "links",
+          id: r.id,
+          values: { manual_rank: (i + 1) * 10 },
+        }),
+      ),
+    )
+    await revalidate()
   }
 
   async function submit() {
