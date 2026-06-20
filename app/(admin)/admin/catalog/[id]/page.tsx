@@ -31,6 +31,7 @@ export default function CatalogAssetPage() {
   const marketQuery = useOne<MarketRow>({
     resource: "markets",
     id: cgId,
+    dataProviderName: "markets",
     queryOptions: { enabled: !!cgId, retry: 0 },
   })
   const market = marketQuery.query.data?.data ?? null

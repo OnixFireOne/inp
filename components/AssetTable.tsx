@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
 import { AssetRow } from "./AssetRow"
 import { requestOpenChart } from "./TvChart"
@@ -21,6 +22,7 @@ interface AssetTableProps {
 export function AssetTable({ initialData }: AssetTableProps = {}) {
   const [page, setPage] = useState(1)
   const [sparkWindow, setSparkWindow] = useState<SparkWindow>("7d")
+  const router = useRouter()
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["markets", page],
@@ -30,13 +32,21 @@ export function AssetTable({ initialData }: AssetTableProps = {}) {
     staleTime: 30_000,
   })
 
+  const rows = data?.rows ?? []
+  const firstId = rows[0]?.id
+
+  // Prefetch the intercepting route chunk for the first asset on the page.
+  // Eliminates cold delay on first drawer open — works on desktop and mobile
+  // without requiring a hover first.
+  useEffect(() => {
+    if (firstId) router.prefetch(`/asset/${firstId}`)
+  }, [firstId, router])
+
   // Open the always-mounted chart panel via the global event channel.
   function openChart(row: MarketRow) {
     const symbol = `BINANCE:${(row.symbol || row.id).toUpperCase()}USDT`
     requestOpenChart({ symbol, name: row.name, ticker: row.symbol })
   }
-
-  const rows = data?.rows ?? []
 
   return (
     <div className="w-full max-w-[var(--maxw)] mx-auto">

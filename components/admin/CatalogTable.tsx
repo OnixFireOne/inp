@@ -198,7 +198,7 @@ function FilterBtn({
   return (
     <button
       onClick={() => onChange(value)}
-      className={`px-3 py-1.5 text-sm rounded border ${active ? "bg-[var(--surface)] border-foreground/30" : "border-transparent text-[var(--text-mut)] hover:text-foreground"}`}
+      className={`px-3 py-1.5 text-sm rounded border ${active ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-foreground"}`}
     >
       {children}
     </button>

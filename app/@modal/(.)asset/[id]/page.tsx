@@ -14,6 +14,7 @@ import { AssetDrawer } from "@/components/AssetDrawer"
 import { use, useEffect } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { prefetchLinks, marketRowQueryKey } from "@/lib/prefetch"
+import { usePathname } from "next/navigation"
 import type { MarketRow } from "@/lib/types"
 
 interface AssetModalPageProps {
@@ -23,6 +24,12 @@ interface AssetModalPageProps {
 export default function AssetModalPage({ params }: AssetModalPageProps) {
   const { id } = use(params)
   const qc = useQueryClient()
+  const pathname = usePathname()
+
+  // Guard: only render the modal when the URL is /asset/[id].
+  // Direct visits to the full /asset/[id] page don't include this slot
+  // (Next renders app/asset/[id]/page.tsx directly).
+  if (!pathname?.startsWith("/asset/")) return null
 
   const marketRow = qc.getQueryData<MarketRow>(marketRowQueryKey(id))
   const market = marketRow ?? undefined

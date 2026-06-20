@@ -57,6 +57,7 @@ export function AdminProviders({ children }: { children: ReactNode }) {
           { name: "assets" },
           { name: "links" },
           { name: "markets" },
+          { name: "link_categories" },
         ]}
         options={{ disableTelemetry: true }}
       >
