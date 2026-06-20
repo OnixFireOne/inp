@@ -11,7 +11,7 @@ import { AssetTable } from "@/components/AssetTable"
 import type { MarketsResponse } from "@/lib/types"
 import type { Link } from "@/types/asset"
 import { supabaseServer } from "@/lib/supabase/server"
-import { SITE_URL } from "@/lib/site"
+import { SITE_URL, INTERNAL_BASE_URL } from "@/lib/site"
 
 interface AssetRow {
   id: string
@@ -40,24 +40,20 @@ async function fetchAll(baseUrl: string, id: string) {
       .select("id, name, ticker, icon, coingecko_id, tv_symbol")
       .eq("coingecko_id", id)
       .maybeSingle<AssetRow>(),
-    fetch(`${baseUrl}/api/links?cg=${encodeURIComponent(id)}`, { next: { revalidate: 60 } }),
-    fetch(`${baseUrl}/api/markets?ids=${encodeURIComponent(id)}`, { next: { revalidate: 45 } }),
+    fetch(`${baseUrl}/api/links?cg=${encodeURIComponent(id)}`, { next: { revalidate: 60 } })
+      .then((r) => (r.ok ? r.json() : { asset: null, links: [], categories: [] }))
+      .catch(() => ({ asset: null, links: [], categories: [] })),
+    fetch(`${baseUrl}/api/markets?ids=${encodeURIComponent(id)}`, { next: { revalidate: 45 } })
+      .then((r) => (r.ok ? r.json() : { rows: [] }))
+      .catch(() => ({ rows: [] })),
   ])
-
-  const linksPayload: LinksPayload = linksRes.ok
-    ? await linksRes.json()
-    : { asset: null, links: [], categories: [] }
-
-  const marketsPayload: { rows: MarketRowMinimal[] } = marketRes.ok
-    ? await marketRes.json()
-    : { rows: [] }
 
   return {
     asset: assetRes.data ?? null,
-    describedAsset: linksPayload.asset ?? null,
-    links: linksPayload.links ?? [],
-    categories: linksPayload.categories ?? [],
-    marketRow: marketsPayload.rows?.[0] ?? null,
+    describedAsset: linksRes.asset ?? null,
+    links: linksRes.links ?? [],
+    categories: linksRes.categories ?? [],
+    marketRow: marketRes.rows?.[0] ?? null,
   }
 }
 
@@ -73,7 +69,7 @@ type MarketRowMinimal = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params
-  const baseUrl = SITE_URL
+  const internalBaseUrl = INTERNAL_BASE_URL
 
   const [{ data: asset }, linksRes, marketRes] = await Promise.all([
     (await supabaseServer())
@@ -81,12 +77,12 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       .select("id, name, ticker, icon, coingecko_id")
       .eq("coingecko_id", id)
       .maybeSingle<{ id: string; name: string; ticker: string; icon: string | null; coingecko_id: string }>(),
-    fetch(`${baseUrl}/api/links?cg=${encodeURIComponent(id)}`, { next: { revalidate: 60 } }).then((r) =>
-      r.ok ? (r.json() as Promise<LinksPayload>) : { asset: null, links: [], categories: [] },
-    ),
-    fetch(`${baseUrl}/api/markets?ids=${encodeURIComponent(id)}`, { next: { revalidate: 45 } }).then((r) =>
-      r.ok ? (r.json() as Promise<{ rows: MarketRowMinimal[] }>) : { rows: [] },
-    ),
+    fetch(`${internalBaseUrl}/api/links?cg=${encodeURIComponent(id)}`, { next: { revalidate: 60 } })
+      .then((r) => (r.ok ? (r.json() as Promise<LinksPayload>) : { asset: null, links: [], categories: [] }))
+      .catch(() => ({ asset: null, links: [], categories: [] })),
+    fetch(`${internalBaseUrl}/api/markets?ids=${encodeURIComponent(id)}`, { next: { revalidate: 45 } })
+      .then((r) => (r.ok ? (r.json() as Promise<{ rows: MarketRowMinimal[] }>) : { rows: [] }))
+      .catch(() => ({ rows: [] })),
   ])
 
   const name = asset?.name ?? marketRes.rows?.[0]?.name ?? id
@@ -100,11 +96,11 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   return {
     title,
     description,
-    alternates: { canonical: `${baseUrl}/asset/${id}` },
+    alternates: { canonical: `${SITE_URL}/asset/${id}` },
     openGraph: {
       title,
       description,
-      url: `${baseUrl}/asset/${id}`,
+      url: `${SITE_URL}/asset/${id}`,
       ...(icon ? { images: [{ url: icon, alt: `${name} icon` }] } : {}),
       type: "article",
     },
@@ -119,7 +115,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function AssetPage({ params }: PageProps) {
   const { id } = await params
-  const baseUrl = SITE_URL
+  const baseUrl = INTERNAL_BASE_URL
 
   const [{ asset, describedAsset, links, categories, marketRow }, marketsHome] = await Promise.all([
     fetchAll(baseUrl, id),
