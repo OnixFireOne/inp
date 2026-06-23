@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   const [{ data: asset, error: assetErr }, { data: categories, error: catErr }] = await Promise.all([
     supabase
       .from("assets")
-      .select("id, name, ticker, icon, coingecko_id, tv_symbol")
+      .select("id, name, ticker, icon, coingecko_id, tv_symbol, category_orders")
       .eq("coingecko_id", cg)
       .maybeSingle(),
     supabase
@@ -66,7 +66,9 @@ export async function GET(req: NextRequest) {
   const payload = {
     asset,
     links: (links ?? []) as Link[],
-    categories: (categories ?? []) as CategoryMeta[],
+    // Per-asset category sort override. `category_orders` is a jsonb map of
+    // { categoryKey: sortIndex }. Missing keys fall back to the table's sort.
+    categories: applyCategoryOrder((categories ?? []) as CategoryMeta[], (asset as { category_orders?: Record<string, number> | null } | null)?.category_orders ?? null),
   }
   await kvSetEx(cacheKey, TTL, payload)
   return json(payload)
@@ -80,4 +82,20 @@ function json(data: unknown, status = 200) {
       "cache-control": `public, s-maxage=${TTL}, stale-while-revalidate=120`,
     },
   })
+}
+
+// Merge per-asset sort overrides on top of the default link_categories.sort.
+// Override wins when present; otherwise the row's default sort is kept. Stable
+// for any category not mentioned in the override.
+function applyCategoryOrder(
+  categories: CategoryMeta[],
+  overrides: Record<string, number> | null,
+): CategoryMeta[] {
+  if (!overrides || typeof overrides !== "object") return categories
+  const out = categories.map((c) => {
+    const v = overrides[c.key]
+    return typeof v === "number" && Number.isFinite(v) ? { ...c, sort: v } : c
+  })
+  out.sort((a, b) => a.sort - b.sort)
+  return out
 }

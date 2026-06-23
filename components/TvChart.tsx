@@ -118,12 +118,16 @@ export function TvChart({ symbol, onLoadingChange }: TvChartProps) {
         new TV.widget({
           container_id: idRef.current,
           symbol,
-          interval: "60",
+          interval: "D",
           theme,
           autosize: true,
-          hide_side_toolbar: true,
-          allow_symbol_change: false,
-          locale: "ru",
+          hide_side_toolbar: false,
+          hide_top_toolbar: false,
+          hide_legend: false,
+          withdateranges: true,
+          timezone: "Europe/Moscow",
+          locale: "en",
+          allow_symbol_change: true,
         })
         currentSymbol.current = symbol
 

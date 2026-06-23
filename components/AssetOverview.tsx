@@ -15,7 +15,7 @@ export interface AssetOverviewMarket {
   name: string
   symbol: string
   image: string
-  price: number
+  price: number | null
   change24h: number
   marketCap: number | null
 }

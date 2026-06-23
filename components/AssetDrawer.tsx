@@ -29,7 +29,7 @@ interface AssetDrawerProps {
   onOpenChange: (open: boolean) => void
   coingeckoId: string | null
   /** Optional market snapshot from the table row (for the empty state). */
-  market?: { name: string; symbol: string; image: string; price: number; change24h: number; marketCap: number | null }
+  market?: { name: string; symbol: string; image: string; price: number | null; change24h: number; marketCap: number | null }
 }
 
 interface LinksPayload {

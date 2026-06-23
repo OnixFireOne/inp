@@ -13,7 +13,9 @@
 import { useEffect } from "react"
 import { useForm } from "@refinedev/react-hook-form"
 import { useOne, type HttpError } from "@refinedev/core"
+import { useQueryClient } from "@tanstack/react-query"
 import { LinksEditor } from "./LinksEditor"
+import { linksQueryKey } from "@/lib/prefetch"
 import type { MarketRow } from "@/lib/types"
 
 type Described = {
@@ -44,6 +46,10 @@ export function AssetEditor({
 }) {
   const isEdit = !!existing
   const targetId = existing?.id ?? market.id
+  // Used both by the drawer chart (links payload) and by server-side KV cache
+  // invalidation. For the synthetic "all" row this is just "all".
+  const coingeckoId = existing?.coingecko_id ?? market.id
+  const queryClient = useQueryClient()
 
   // tv_symbol is not in the editor's `existing` subset — pull it via useOne
   // only when editing so we don't clobber it.
@@ -92,8 +98,26 @@ export function AssetEditor({
     if (tv != null) setValue("tv_symbol", String(tv), { shouldDirty: false })
   }, [isEdit, tvQuery.query.data, setValue])
 
+  // Wrap Refine's onFinish so any patch to tv_symbol / icon / coingecko_id
+  // also flushes the server-side /api/links KV cache and the browser-side
+  // RQ cache. Without this, the drawer would show the stale tv_symbol until
+  // the in-memory KV TTL expires (default 60s).
+  async function handleFinish(values: AssetFormValues) {
+    const previousCg = (existing?.coingecko_id ?? market.id) as string
+    await onFinish(values)
+    try {
+      await fetch("/api/admin/revalidate-links", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cg: previousCg }),
+        cache: "no-store",
+      })
+    } catch { /* best-effort */ }
+    queryClient.invalidateQueries({ queryKey: linksQueryKey(previousCg) })
+  }
+
   return (
-    <form onSubmit={handleSubmit(onFinish)} className="space-y-6">
+    <form onSubmit={handleSubmit(handleFinish)} className="space-y-6">
       <section className="space-y-3">
         <h3 className="font-medium">
           {isEdit ? "Редактирование актива" : "Описать монету"}
@@ -159,7 +183,7 @@ export function AssetEditor({
 
       {isEdit && (
         <section className="border-t pt-4">
-          <LinksEditor assetId={existing!.id} coingeckoId={existing!.coingecko_id ?? market.id} />
+          <LinksEditor assetId={existing!.id} coingeckoId={coingeckoId} />
         </section>
       )}
     </form>

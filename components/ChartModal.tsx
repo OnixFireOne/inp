@@ -2,10 +2,10 @@
 
 // ChartModal — always-mounted chart panel (singleton).
 //
-// FIX: the TradingView widget is mounted into TvChart's own LEAF <div>,
-// NOT into this host container. The host container is React-managed and holds
-// the header / spinner / placeholder; pointing TradingView at it makes React
-// and TradingView fight over the same DOM nodes and breaks rendering.
+// The TradingView widget is mounted into TvChart's own LEAF <div>,
+// NOT into this host container. The host container is React-managed and
+// hosts only the chart area + the close button. Pointing TradingView at the
+// host would make React and TradingView fight over the same DOM nodes.
 //
 // The single TvChart instance lives inside the host. When closed, the host is
 // parked off-screen with real dimensions so the iframe can warm up. When open,
@@ -30,8 +30,7 @@ interface VisibleMeta {
 export function ChartModal() {
   const [meta, setMeta] = useState<VisibleMeta | null>(null)
   const [symbol, setSymbol] = useState<string>(DEFAULT_WARM_SYMBOL)
-  // Only valid TradingView pairs are fed to the (always-mounted) chart, so the
-  // warm instance is preserved even when an unsupported coin is opened.
+  // Always feed the requested symbol to the chart (CRYPTOCAP:TOTAL, BINANCE:*, etc.)
   const [chartSymbol, setChartSymbol] = useState<string>(DEFAULT_WARM_SYMBOL)
   const [open, setOpen] = useState(false)
   const [visible, setVisible] = useState(false)
@@ -43,7 +42,7 @@ export function ChartModal() {
     const off = onOpenChartRequest((req: ChartOpenRequest) => {
       setMeta({ name: req.name, ticker: req.ticker })
       setSymbol(req.symbol)
-      if (req.symbol.startsWith("BINANCE:")) setChartSymbol(req.symbol)
+      setChartSymbol(req.symbol)
       setOpen(true)
     })
     return off
@@ -75,15 +74,15 @@ export function ChartModal() {
     setOpen(false)
   }
 
-  const isBinancePair = symbol.startsWith("BINANCE:")
-
   // Host positioning: off-screen when closed, centered when open.
+  // overflow-visible keeps the close button (positioned outside the frame) visible.
+  // The inner chart wrapper has its own overflow-hidden + rounded-2xl for clipping.
   const hostClass = [
     "fixed z-[61]",
     visible
-      ? "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(820px,100%)] h-[min(560px,90vh)] opacity-100"
-      : "left-[-99999px] top-0 w-[820px] h-[560px] opacity-0 pointer-events-none",
-    "transition-opacity duration-200 overflow-hidden rounded-2xl border border-[var(--border)] shadow-2xl bg-[var(--surface)]",
+      ? "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(988px,96vw)] h-[min(720px,90vh)] opacity-100"
+      : "left-[-99999px] top-0 w-[988px] h-[720px] opacity-0 pointer-events-none",
+    "transition-opacity duration-200",
   ].join(" ")
 
   return (
@@ -99,43 +98,29 @@ export function ChartModal() {
       />
 
       {/* Host container — permanent home of the TradingView iframe.
-          Never removed from the DOM or reparented. */}
+          Never removed from the DOM or reparented. overflow-visible lets the
+          floating close button escape the frame. */}
       <div id={TV_HOST_ID} className={hostClass}>
-        {/* Header bar (always above the iframe) */}
-        <div className="absolute top-0 left-0 right-0 h-14 px-5 flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] z-[10]">
-          <div>
-            <div className="font-semibold text-base">
-              {meta?.name ?? (open ? "Loading…" : "")}
-            </div>
-            <div className="text-xs text-[var(--text-mut)]">
-              {meta ? `${meta.ticker} — TradingView` : "TradingView"}
-            </div>
-          </div>
-          <button onClick={close} aria-label="Close chart" className="icon-btn w-9 h-9">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+        {/* Close button — floats outside the chart, top-right. */}
+        <button
+          onClick={close}
+          aria-label="Close chart"
+          className="absolute -top-3 -right-3 z-[12] w-9 h-9 rounded-full border border-[var(--border)] bg-[var(--surface)] shadow-lg flex items-center justify-center text-[var(--text-mut)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
 
-        {/* Chart area — its ONLY child is TvChart's leaf div.
-            TvChart owns the DOM inside; React must not add siblings here. */}
-        <div className="absolute top-14 left-0 right-0 bottom-0">
+        {/* Chart area — inner wrapper provides the visual frame (clipping + border).
+            p-1 = 0.25rem padding around the iframe. */}
+        <div className="w-full h-full overflow-hidden rounded-2xl border border-[var(--border)] shadow-2xl bg-[var(--surface)] p-1">
           <TvChart symbol={chartSymbol} onLoadingChange={setLoading} />
         </div>
 
-        {/* Placeholder overlay for coins with no TradingView pair */}
-        {!isBinancePair && (
-          <div className="absolute top-14 left-0 right-0 bottom-0 z-[6] flex flex-col items-center justify-center gap-3 text-[var(--text-mut)] bg-[var(--surface)]">
-            <div className="text-4xl opacity-30">📊</div>
-            <div className="text-sm">No chart available for {meta?.ticker ?? "—"}</div>
-            <div className="text-xs opacity-60">Pair {symbol} not found on Binance</div>
-          </div>
-        )}
-
         {/* Loading spinner overlay (covers only the chart area) */}
-        {isBinancePair && loading && visible && (
-          <div className="absolute top-14 left-0 right-0 bottom-0 z-[5] flex flex-col items-center justify-center gap-3 text-[var(--text-mut)] text-sm bg-[var(--surface)] transition-opacity duration-200">
+        {loading && visible && (
+          <div className="absolute inset-1 z-[5] flex flex-col items-center justify-center gap-3 text-[var(--text-mut)] text-sm bg-[var(--surface)] rounded-2xl transition-opacity duration-200">
             <Spinner />
             <div>TradingView loading…</div>
           </div>

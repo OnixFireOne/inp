@@ -1,19 +1,23 @@
-// PriceCell — PRICE ONLY (no change % — that lives in its own column).
-// Large prices (>= $100) → whole dollars only (no cents).
-// Smaller prices (< $100) → cents + up to 6 decimal places for tiny amounts.
+"use client"
 
-function formatUsd(n: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: n < 1 ? 2 : n < 100 ? 2 : 0,
-    maximumFractionDigits: n < 1 ? 6 : 2,
-  }).format(n)
-}
+// PriceCell — PRICE ONLY (no change %).
+// Large values (>= $1M, e.g. 24h volume for the synthetic "all" row) →
+// compact T/B/M. >= $100 → whole dollars; < $100 → cents; tiny → up to 6
+// fraction digits.
+//
+// Prop semantics:
+//   - `null`      → explicit "no data" (e.g. allRow before /global returns).
+//                   Renders "—".
+//   - `undefined` → still loading. Renders a pulse placeholder.
 
-export function PriceCell({ price }: { price?: number }) {
+import { compactUsd } from "@/lib/format"
+
+export function PriceCell({ price }: { price?: number | null }) {
+  if (price === null) {
+    return <span className="text-[var(--text-mut)]">—</span>
+  }
   if (price == null) {
     return <span className="inline-block w-24 h-5 bg-[var(--surface-2)] rounded animate-pulse" aria-hidden />
   }
-  return <span className="tabular-nums text-[14px]">{formatUsd(price)}</span>
+  return <span className="tabular-nums text-[14px]">{compactUsd(price)}</span>
 }
