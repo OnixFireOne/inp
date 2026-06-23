@@ -6,17 +6,18 @@ import type { QueryClient } from "@tanstack/react-query"
 import type { Asset, Link } from "@/types/asset"
 import type { MarketRow } from "@/lib/types"
 
-interface LinksPayload {
+export interface LinksPayload {
   asset: Pick<Asset, "id" | "name" | "ticker" | "icon" | "coingecko_id" | "tv_symbol"> | null
   links: Link[]
+  categories: { key: string; label: string; icon: string | null; sort: number }[]
 }
 
 export const linksQueryKey = (coingeckoId: string) => ["links", coingeckoId] as const
 export const marketRowQueryKey = (id: string) => ["market-row", id] as const
 
-async function fetchLinks(cg: string, signal: AbortSignal): Promise<LinksPayload> {
+export async function fetchLinksPayload(cg: string, signal?: AbortSignal): Promise<LinksPayload> {
   const r = await fetch(`/api/links?cg=${encodeURIComponent(cg)}`, { signal })
-  if (!r.ok) return { asset: null, links: [] }
+  if (!r.ok) return { asset: null, links: [], categories: [] }
   return (await r.json()) as LinksPayload
 }
 
@@ -25,7 +26,7 @@ export function prefetchLinks(qc: QueryClient, coingeckoId: string) {
   // Same queryKey as AssetDrawer → cache hit when the modal opens.
   void qc.prefetchQuery({
     queryKey: linksQueryKey(coingeckoId),
-    queryFn: ({ signal }) => fetchLinks(coingeckoId, signal),
+    queryFn: ({ signal }) => fetchLinksPayload(coingeckoId, signal),
     staleTime: 60_000,
   })
 }

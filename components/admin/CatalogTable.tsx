@@ -21,6 +21,11 @@ type Described = {
   links: { count: number }[]
 }
 
+// "All Crypto" row: synthesized by /api/markets on page=1 (real CoinGecko
+// /global data + reconstructed 7d total-cap sparkline). Always the first
+// element of `rows` on the first page. No client-side mirroring needed —
+// keeping a local duplicate here would clash with the API's `id: "all"`.
+
 export function CatalogTable({
   onSelect,
 }: {
@@ -84,6 +89,10 @@ export function CatalogTable({
     })
   }, [accumulated, q, filter, describedMap])
 
+  // /api/markets?page=1 already prepends the "all" row, so `rows` is the
+  // complete list to render — no extra injection needed.
+  const rowsToRender: MarketRow[] = filtered
+
   const loading = markets.query.isLoading || markets.query.isFetching
 
   return (
@@ -97,7 +106,7 @@ export function CatalogTable({
           className="border rounded px-3 py-1.5 text-sm w-64 bg-[var(--surface)]"
         />
         <FilterBtn value="all" current={filter} onChange={setFilter}>
-          Все <span className="text-[var(--text-mut)]">({accumulated.length})</span>
+          Все <span className="text-[var(--text-mut)]">({accumulated.length + 1})</span>
         </FilterBtn>
         <FilterBtn value="described" current={filter} onChange={setFilter}>
           Описанные <span className="text-[var(--text-mut)]">({describedMap.size})</span>
@@ -130,31 +139,51 @@ export function CatalogTable({
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r) => {
+            {rowsToRender.map((r) => {
               const d = describedMap.get(r.id)
               const linkCount = Array.isArray(d?.links) && d.links[0]?.count != null
                 ? Number(d!.links![0].count)
                 : undefined
+              const isAll = r.id === "all"
               return (
                 <tr
                   key={r.id}
                   className="border-t hover:bg-[var(--surface)]/50 cursor-pointer"
                   onClick={() => onSelect(r, d)}
                 >
-                  <td className="px-3 py-2 text-[var(--text-mut)]">{r.rank || "—"}</td>
+                  <td className="px-3 py-2 text-[var(--text-mut)]">
+                    {isAll ? (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-label="Pinned"
+                      >
+                        <path d="M12 17v5" />
+                        <path d="M9 10.76V6a3 3 0 0 1 6 0v4.76a2 2 0 0 0 .59 1.41L18 14H6l2.41-1.83A2 2 0 0 0 9 10.76z" />
+                      </svg>
+                    ) : (
+                      r.rank || "—"
+                    )}
+                  </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2">
-                      {r.image && (
+                      {r.image ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={r.image} alt="" className="w-5 h-5 rounded-full" />
-                      )}
+                      ) : null}
                       <span className="font-medium">{r.name}</span>
                       <span className="text-[var(--text-mut)] text-xs uppercase">{r.symbol}</span>
                     </div>
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums">${r.price.toLocaleString()}</td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${r.change24h >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                    {r.change24h.toFixed(2)}%
+                  <td className="px-3 py-2 text-right tabular-nums">{isAll || r.price == null ? "—" : `$${r.price.toLocaleString()}`}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${!isAll && r.change24h >= 0 ? "text-emerald-600" : !isAll ? "text-rose-600" : "text-[var(--text-mut)]"}`}>
+                    {isAll ? "—" : `${r.change24h.toFixed(2)}%`}
                   </td>
                   <td className="px-3 py-2"><StatusBadge described={d} linkCount={linkCount} /></td>
                   <td className="px-3 py-2 text-right">
@@ -163,7 +192,7 @@ export function CatalogTable({
                 </tr>
               )
             })}
-            {!loading && filtered.length === 0 && (
+            {!loading && rowsToRender.length === 0 && (
               <tr><td colSpan={6} className="px-3 py-6 text-center text-[var(--text-mut)]">Нет строк</td></tr>
             )}
           </tbody>

@@ -22,6 +22,8 @@ interface AssetTableProps {
 export function AssetTable({ initialData }: AssetTableProps = {}) {
   const [page, setPage] = useState(1)
   const [sparkWindow, setSparkWindow] = useState<SparkWindow>("7d")
+  const [show30d, setShow30d] = useState(false)
+  const [show1y, setShow1y] = useState(false)
   const router = useRouter()
 
   const { data, isLoading, isError } = useQuery({
@@ -32,7 +34,7 @@ export function AssetTable({ initialData }: AssetTableProps = {}) {
     staleTime: 30_000,
   })
 
-  const rows = data?.rows ?? []
+  const rows: MarketRow[] = data?.rows ?? []
   const firstId = rows[0]?.id
 
   // Prefetch the intercepting route chunk for the first asset on the page.
@@ -43,8 +45,7 @@ export function AssetTable({ initialData }: AssetTableProps = {}) {
   }, [firstId, router])
 
   // Open the always-mounted chart panel via the global event channel.
-  function openChart(row: MarketRow) {
-    const symbol = `BINANCE:${(row.symbol || row.id).toUpperCase()}USDT`
+  function openChart(row: MarketRow, symbol: string) {
     requestOpenChart({ symbol, name: row.name, ticker: row.symbol })
   }
 
@@ -74,6 +75,24 @@ export function AssetTable({ initialData }: AssetTableProps = {}) {
           </div>
 
           <div className="flex items-center gap-2">
+            <div className="flex items-center rounded-full border border-[var(--border)] overflow-hidden">
+              <button
+                onClick={() => setShow30d((v) => !v)}
+                className={`spark-toggle-btn px-2 py-1 cursor-pointer text-sm ${show30d ? "bg-[var(--surface-2)] text-[var(--text)]" : ""}`}
+                aria-label="Toggle 30 day change"
+                aria-pressed={show30d}
+              >
+                30d
+              </button>
+              <button
+                onClick={() => setShow1y((v) => !v)}
+                className={`spark-toggle-btn px-2 py-1 cursor-pointer text-sm ${show1y ? "bg-[var(--surface-2)] text-[var(--text)]" : ""}`}
+                aria-label="Toggle 1 year change"
+                aria-pressed={show1y}
+              >
+                1y
+              </button>
+            </div>
             <ThemeToggle />
           </div>
         </div>
@@ -89,6 +108,8 @@ export function AssetTable({ initialData }: AssetTableProps = {}) {
               <th className="px-4 py-3 text-right">Price</th>
               <th className="px-4 py-3 text-right hidden sm:table-cell">Market Cap</th>
               <th className="px-4 py-3 text-right">24h</th>
+              {show30d && <th className="px-4 py-3 text-right">30d</th>}
+              {show1y && <th className="px-4 py-3 text-right">1y</th>}
               <th className="px-4 py-3 w-28 hidden md:table-cell">
                 <div className="flex items-center justify-end text-xs text-[var(--text-mut)]">
                   <div className="flex items-center rounded-full border border-[var(--border)] overflow-hidden">
@@ -128,24 +149,28 @@ export function AssetTable({ initialData }: AssetTableProps = {}) {
                   <td className="px-4 text-right"><div className="w-20 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>
                   <td className="px-4 text-right hidden sm:table-cell"><div className="w-16 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>
                   <td className="px-4 text-right"><div className="w-14 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>
+                  {show30d && <td className="px-4 text-right"><div className="w-14 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>}
+                  {show1y && <td className="px-4 text-right"><div className="w-14 h-4 bg-[var(--surface-2)] rounded animate-pulse ml-auto" /></td>}
                   <td className="px-4 hidden md:table-cell"><div className="w-24 h-8 bg-[var(--surface-2)] rounded animate-pulse" /></td>
                 </tr>
               ))
             ) : isError ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-[var(--text-mut)]">Failed to load market data.</td>
+                <td colSpan={6 + (show30d ? 1 : 0) + (show1y ? 1 : 0)} className="px-4 py-10 text-center text-[var(--text-mut)]">Failed to load market data.</td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-[var(--text-mut)]">No data.</td>
+                <td colSpan={6 + (show30d ? 1 : 0) + (show1y ? 1 : 0)} className="px-4 py-10 text-center text-[var(--text-mut)]">No data.</td>
               </tr>
             ) : (
               rows.map((row, idx) => (
                 <AssetRow
                   key={row.id}
                   row={row}
-                  index={(page - 1) * (data?.perPage ?? 100) + idx + 1}
+                  index={row.id === "all" ? 0 : (page - 1) * (data?.perPage ?? 100) + idx + 1 - (page === 1 ? 1 : 0)}
                   sparkWindow={sparkWindow}
+                  show30d={show30d}
+                  show1y={show1y}
                   onOpenChart={openChart}
                 />
               ))

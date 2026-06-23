@@ -11,7 +11,7 @@
 // after a drop. manual_rank is also exposed as a manual number fallback.
 //
 // Tier values: "Core" and "Trusted" (External tier was removed).
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   DndContext,
   closestCenter,
@@ -212,6 +212,14 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
         </button>
       </div>
 
+      {/* Per-asset category sort order (category_orders). */}
+      <CategoryOrderEditor
+        assetId={assetId}
+        coingeckoId={coingeckoId}
+        categories={categories}
+        queryClient={queryClient}
+      />
+
       {/* Category filter chips */}
       <div className="flex flex-wrap gap-1.5">
         <button
@@ -378,5 +386,221 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-xs text-[var(--text-mut)]">{label}</span>
       {children}
     </label>
+  )
+}
+
+// =============================================================
+// CategoryOrderEditor
+// -------------------------------------------------------------
+// Per-asset category sort overrides stored in assets.category_orders (jsonb).
+// Loaded lazily from the RQ-cached links payload; saved via
+// POST /api/admin/asset-category-orders.
+// =============================================================
+
+interface AssetRowSummary {
+  id: string
+  coingecko_id: string
+  category_orders?: Record<string, number> | null
+}
+
+function CategoryOrderEditor({
+  assetId,
+  coingeckoId,
+  categories,
+  queryClient,
+}: {
+  assetId: string
+  coingeckoId: string | undefined
+  categories: Category[]
+  queryClient: ReturnType<typeof useQueryClient>
+}) {
+  const [overrides, setOverrides] = useState<Record<string, number>>({})
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // Read current overrides from the RQ-cached links payload (no extra fetch).
+  useEffect(() => {
+    if (!coingeckoId) return
+    const cached = queryClient.getQueryData<{ asset?: AssetRowSummary | null }>(
+      linksQueryKey(coingeckoId),
+    )
+    const o = cached?.asset?.category_orders ?? null
+    setOverrides(o && typeof o === "object" ? { ...o } : {})
+  }, [coingeckoId, queryClient])
+
+  // Merged view: default sort from categories table, overridden by the map.
+  // Sorted ascending by effective sort.
+  const view = useMemo(() => {
+    const merged = categories.map((c) => ({
+      key: c.key,
+      label: c.label,
+      icon: c.icon,
+      sort: overrides[c.key] ?? c.sort,
+      overridden: Object.prototype.hasOwnProperty.call(overrides, c.key),
+    }))
+    merged.sort((a, b) => a.sort - b.sort)
+    return merged
+  }, [categories, overrides])
+
+  function move(key: string, dir: -1 | 1) {
+    setOverrides((prev) => {
+      const idx = view.findIndex((v) => v.key === key)
+      if (idx < 0) return prev
+      const swapIdx = idx + dir
+      if (swapIdx < 0 || swapIdx >= view.length) return prev
+      const next = [...view]
+      const a = next[idx]
+      const b = next[swapIdx]
+      // Swap their effective sort values; persist both keys so the order is
+      // locked even when a default would otherwise re-insert between them.
+      next[idx] = b
+      next[swapIdx] = a
+      const out = { ...prev }
+      out[a.key] = a.sort
+      out[b.key] = b.sort
+      return out
+    })
+    setSavedAt(null)
+    setError(null)
+  }
+
+  function clearOverride(key: string) {
+    setOverrides((prev) => {
+      if (!(key in prev)) return prev
+      const out = { ...prev }
+      delete out[key]
+      return out
+    })
+    setSavedAt(null)
+    setError(null)
+  }
+
+  function clearAll() {
+    setOverrides({})
+    setSavedAt(null)
+    setError(null)
+  }
+
+  async function save() {
+    if (!coingeckoId) return
+    setSaving(true)
+    setError(null)
+    try {
+      const r = await fetch("/api/admin/asset-category-orders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: assetId,
+          coingecko_id: coingeckoId,
+          category_orders: overrides,
+        }),
+        cache: "no-store",
+      })
+      if (!r.ok) {
+        const text = await r.text()
+        throw new Error(text || `HTTP ${r.status}`)
+      }
+      // Drop server KV + refetch links payload → table reflects new order.
+      try {
+        await fetch("/api/admin/revalidate-links", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cg: coingeckoId }),
+          cache: "no-store",
+        })
+      } catch { /* best-effort */ }
+      await queryClient.invalidateQueries({ queryKey: linksQueryKey(coingeckoId) })
+      setSavedAt(Date.now())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!categories.length) return null
+
+  const hasOverrides = Object.keys(overrides).length > 0
+
+  return (
+    <div className="border rounded-lg bg-[var(--surface)] p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium">Порядок категорий</div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={clearAll}
+            disabled={!hasOverrides || saving}
+            className="px-2.5 py-1 text-xs rounded border disabled:opacity-40 cursor-pointer"
+          >
+            Сбросить
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="px-2.5 py-1 text-xs rounded border bg-foreground text-background disabled:opacity-50 cursor-pointer"
+          >
+            {saving ? "Сохранение…" : "Сохранить"}
+          </button>
+        </div>
+      </div>
+      <ul className="divide-y border rounded">
+        {view.map((c, i) => (
+          <li key={c.key} className="flex items-center gap-2 px-2 py-1.5 text-sm">
+            <span className="w-6 text-right text-xs text-[var(--text-mut)] tabular-nums">{i + 1}</span>
+            <span className="flex-1 truncate">
+              {c.icon && <span className="mr-1" aria-hidden>{c.icon}</span>}
+              {c.label}
+              {c.overridden && (
+                <span className="ml-2 text-[10px] uppercase text-[var(--accent)]">custom</span>
+              )}
+            </span>
+            <span className="text-xs text-[var(--text-mut)] tabular-nums w-12 text-right">sort {c.sort}</span>
+            <button
+              type="button"
+              onClick={() => move(c.key, -1)}
+              disabled={i === 0}
+              aria-label={`Поднять ${c.label}`}
+              className="w-7 h-7 inline-flex items-center justify-center rounded border disabled:opacity-30 cursor-pointer"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M18 15l-6-6-6 6" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => move(c.key, 1)}
+              disabled={i === view.length - 1}
+              aria-label={`Опустить ${c.label}`}
+              className="w-7 h-7 inline-flex items-center justify-center rounded border disabled:opacity-30 cursor-pointer"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => clearOverride(c.key)}
+              disabled={!c.overridden}
+              aria-label={`Сбросить порядок для ${c.label}`}
+              className="w-7 h-7 inline-flex items-center justify-center rounded border disabled:opacity-30 cursor-pointer text-[var(--text-mut)]"
+              title="Сбросить порядок"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M3 12a9 9 0 1 0 3-6.7" />
+                <path d="M3 4v5h5" />
+              </svg>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="text-[11px] text-[var(--text-mut)] flex gap-2 items-center">
+        <span>Стрелки ↑/↓ меняют индивидуальный порядок категорий для этого актива.</span>
+        {savedAt && <span className="text-emerald-600">Сохранено.</span>}
+        {error && <span className="text-rose-600">{error}</span>}
+      </div>
+    </div>
   )
 }

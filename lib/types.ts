@@ -16,13 +16,17 @@ export type SparklinesResponse = {
 /** A single row in the markets table (CoinGecko-driven). */
 export type MarketRow = {
   id: string
-  rank: number
+  /** `null` → table renders a Pin icon (e.g. the synthetic "all" row). */
+  rank: number | null
   name: string
   symbol: string
   image: string
-  price: number
+  /** `null` → PriceCell renders "—". */
+  price: number | null
   marketCap: number | null
   change24h: number
+  change30d?: number | null
+  change1y?: number | null
   sparkline: number[]
 }
 

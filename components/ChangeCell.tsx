@@ -1,7 +1,15 @@
 // ChangeCell — only the 24h change, color-coded, no price.
 // Slightly smaller than the price column (Price = 14px, this = 13px).
+//
+// Distinguishes:
+//   - `null`      → explicit "no data" (e.g. /global has no 30d/1y history).
+//                   Renders "—".
+//   - `undefined` → still loading. Renders a pulse placeholder.
 
-export function ChangeCell({ value }: { value?: number }) {
+export function ChangeCell({ value }: { value?: number | null }) {
+  if (value === null) {
+    return <span className="text-[var(--text-mut)]">—</span>
+  }
   if (value == null) {
     return <span className="inline-block w-14 h-4 bg-[var(--surface-2)] rounded animate-pulse" aria-hidden />
   }

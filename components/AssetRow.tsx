@@ -13,31 +13,31 @@ import { ChangeCell } from "./ChangeCell"
 import { MarketCapCell } from "./MarketCapCell"
 import type { MarketRow, SparkWindow } from "@/lib/types"
 import { warmTradingView } from "@/components/TvChart"
-import { prefetchLinks, stashMarketRow } from "@/lib/prefetch"
+import { prefetchLinks, stashMarketRow, linksQueryKey, fetchLinksPayload } from "@/lib/prefetch"
 import { useRouter, usePathname } from "next/navigation"
 
 interface AssetRowProps {
   row: MarketRow
   index: number
   sparkWindow: SparkWindow
-  onOpenChart: (row: MarketRow) => void
-  /** Optional asset mapping for tv_symbol (from /api/links prefetch). */
-  tvSymbolFor?: (coingeckoId: string) => string | undefined
+  show30d?: boolean
+  show1y?: boolean
+  onOpenChart: (row: MarketRow, symbol: string) => void
 }
 
 export function AssetRow({
   row,
   index,
   sparkWindow,
+  show30d = false,
+  show1y = false,
   onOpenChart,
-  tvSymbolFor,
 }: AssetRowProps) {
   const router = useRouter()
   const pathname = usePathname()
   const qc = useQueryClient()
+  const isAll = row.id === "all"
   const positive = row.change24h >= 0
-  const tvSymbol =
-    tvSymbolFor?.(row.id) ?? `BINANCE:${row.symbol || row.id.toUpperCase()}USDT`
 
   function handleOpenDrawer() {
     stashMarketRow(qc, row)
@@ -48,11 +48,26 @@ export function AssetRow({
     }
   }
 
-  function handleOpenChart(e: React.MouseEvent) {
+  async function handleOpenChart(e: React.MouseEvent) {
     e.stopPropagation()
     e.preventDefault()
     warmTradingView()
-    onOpenChart(row)
+
+    const fallback = `BINANCE:${(row.symbol || row.id).toUpperCase()}USDT`
+    let symbol = isAll ? "CRYPTOCAP:TOTAL" : fallback
+    if (!isAll) {
+      try {
+        const data = await qc.fetchQuery({
+          queryKey: linksQueryKey(row.id),
+          queryFn: ({ signal }) => fetchLinksPayload(row.id, signal),
+          staleTime: 60_000,
+        })
+        symbol = data?.asset?.tv_symbol?.trim() || fallback
+      } catch {
+        symbol = fallback
+      }
+    }
+    onOpenChart(row, symbol)
   }
 
   function handleHover() {
@@ -69,7 +84,24 @@ export function AssetRow({
       onClick={handleOpenDrawer}
     >
       <td className="px-4 text-[var(--text-mut)] tabular-nums text-sm align-middle">
-        {row.rank || index}
+        {isAll ? (
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-label="Pinned"
+          >
+            <path d="M12 17v5" />
+            <path d="M9 10.76V6a3 3 0 0 1 6 0v4.76a2 2 0 0 0 .59 1.41L18 14H6l2.41-1.83A2 2 0 0 0 9 10.76z" />
+          </svg>
+        ) : (
+          row.rank ?? index
+        )}
       </td>
       <td className="px-4 align-middle">
         <div className="group flex items-center gap-3 min-w-0">
@@ -104,6 +136,16 @@ export function AssetRow({
       <td className="px-4 text-right align-middle">
         <ChangeCell value={row.change24h} />
       </td>
+      {show30d && (
+        <td className="px-4 text-right align-middle tabular-nums">
+          <ChangeCell value={row.change30d} />
+        </td>
+      )}
+      {show1y && (
+        <td className="px-4 text-right align-middle tabular-nums">
+          <ChangeCell value={row.change1y} />
+        </td>
+      )}
       <td className="px-4 align-middle hidden md:table-cell">
         <button
           type="button"
@@ -111,7 +153,7 @@ export function AssetRow({
           onMouseEnter={() => warmTradingView()}
           className="sparkline-btn"
           aria-label={`Open chart for ${row.symbol}`}
-          title={`Chart: ${tvSymbol}`}
+          title={`Chart: ${row.symbol}`}
         >
           <SparklineCell
             coingeckoId={row.id}
