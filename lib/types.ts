@@ -28,6 +28,8 @@ export type MarketRow = {
   change30d?: number | null
   change1y?: number | null
   sparkline: number[]
+  /** Stablecoin / gold / tokenized-bond flag — used to filter the beeswarm. */
+  stable?: boolean
 }
 
 export type MarketsResponse = {

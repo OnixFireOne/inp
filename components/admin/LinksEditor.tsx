@@ -12,6 +12,7 @@
 //
 // Tier values: "Core" and "Trusted" (External tier was removed).
 import { useState, useMemo, useEffect } from "react"
+import * as Dialog from "@radix-ui/react-dialog"
 import {
   DndContext,
   closestCenter,
@@ -63,6 +64,7 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
   const catQuery = useList<Category>({
     resource: "link_categories",
     sorters: [{ field: "sort", order: "asc" }],
+    pagination: { mode: "off" },
   })
   const categories = catQuery.query.data?.data ?? []
   const categoryMap = useMemo(() => {
@@ -213,12 +215,20 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
       </div>
 
       {/* Per-asset category sort order (category_orders). */}
-      <CategoryOrderEditor
-        assetId={assetId}
-        coingeckoId={coingeckoId}
-        categories={categories}
-        queryClient={queryClient}
-      />
+      <details className="rounded border border-[var(--border)] mb-4 group">
+        <summary className="cursor-pointer select-none px-3 py-2 text-sm flex items-center justify-between">
+          <span>Порядок категорий для этой монеты</span>
+          <span className="text-[var(--text-mut)] text-xs group-open:hidden">развернуть</span>
+        </summary>
+        <div className="px-3 pb-3">
+          <CategoryOrderEditor
+            assetId={assetId}
+            coingeckoId={coingeckoId}
+            categories={categories}
+            queryClient={queryClient}
+          />
+        </div>
+      </details>
 
       {/* Category filter chips */}
       <div className="flex flex-wrap gap-1.5">
@@ -228,18 +238,18 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
         >
           Все <span className="text-[var(--text-mut)]">({rows.length})</span>
         </button>
-        {categories.map((cat) => (
-          <button
-            key={cat.key}
-            onClick={() => setActiveCategory(activeCategory === cat.key ? null : cat.key)}
-            className={`px-2.5 py-1 text-xs rounded border cursor-pointer ${activeCategory === cat.key ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-[var(--text)]"}`}
-          >
-            {cat.icon ? `${cat.icon} ` : ""}{cat.label}
-            {catCounts.get(cat.key) != null && (
+        {categories
+          .filter((cat) => (catCounts.get(cat.key) ?? 0) > 0)
+          .map((cat) => (
+            <button
+              key={cat.key}
+              onClick={() => setActiveCategory(activeCategory === cat.key ? null : cat.key)}
+              className={`px-2.5 py-1 text-xs rounded border cursor-pointer ${activeCategory === cat.key ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-[var(--text)]"}`}
+            >
+              {cat.icon ? `${cat.icon} ` : ""}{cat.label}
               <span className="text-[var(--text-mut)] ml-1">({catCounts.get(cat.key)})</span>
-            )}
-          </button>
-        ))}
+            </button>
+          ))}
       </div>
 
       {err?.message && <div className="text-sm text-rose-600">{err.message}</div>}
@@ -266,57 +276,67 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
         </SortableContext>
       </DndContext>
 
-      {editing && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-[var(--surface)] rounded-xl w-full max-w-xl p-5 space-y-3 max-h-[90vh] overflow-y-auto">
-            <h4 className="font-medium">{editing.id ? "Редактировать ссылку" : "Новая ссылка"}</h4>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <Field label="name">
-                <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.name ?? ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-              </Field>
-              <Field label="href">
-                <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.href ?? ""} onChange={(e) => setEditing({ ...editing, href: e.target.value })} placeholder="https://…" />
-              </Field>
-              <Field label="description">
-                <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.description ?? ""} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
-              </Field>
-              <Field label="tier">
-                <select className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.tier ?? "Trusted"} onChange={(e) => setEditing({ ...editing, tier: e.target.value })}>
-                  {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </Field>
-              <Field label="category">
-                <select className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.category ?? "tools"} onChange={(e) => setEditing({ ...editing, category: e.target.value })}>
-                  {categories.map((c) => (
-                    <option key={c.key} value={c.key}>{c.icon ? `${c.icon} ` : ""}{c.label}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="icon URL">
-                <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.icon ?? ""} onChange={(e) => setEditing({ ...editing, icon: e.target.value || null })} placeholder="https://… (фавикон если пусто)" />
-              </Field>
-              <Field label="manual_rank">
-                <input type="number" className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.manual_rank ?? ""} onChange={(e) => setEditing({ ...editing, manual_rank: e.target.value === "" ? null : Number(e.target.value) })} />
-              </Field>
-              <Field label="health">
-                <select className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.health ?? "alive"} onChange={(e) => setEditing({ ...editing, health: e.target.value })}>
-                  {HEALTH.map((h) => <option key={h} value={h}>{h}</option>)}
-                </select>
-              </Field>
-              <Field label="is_top">
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={!!editing.is_top} onChange={(e) => setEditing({ ...editing, is_top: e.target.checked })} />
-                  <span className="text-sm">в топе</span>
-                </label>
-              </Field>
-            </div>
-            <div className="flex gap-2 pt-2">
-              <button onClick={submit} className="px-3 py-1.5 rounded border bg-foreground text-background text-sm cursor-pointer">Сохранить</button>
-              <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded border text-sm cursor-pointer">Отмена</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Dialog.Root open={!!editing} onOpenChange={(o) => { if (!o) setEditing(null) }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/50" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="fixed left-1/2 top-1/2 z-[61] -translate-x-1/2 -translate-y-1/2 w-[min(560px,94vw)] max-h-[88vh] overflow-y-auto rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-2xl p-5 drawer-scroll"
+          >
+            {editing && (
+              <>
+                <Dialog.Title className="text-base font-semibold mb-3">
+                  {editing.id ? "Редактировать ссылку" : "Новая ссылка"}
+                </Dialog.Title>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <Field label="name">
+                    <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.name ?? ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                  </Field>
+                  <Field label="href">
+                    <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.href ?? ""} onChange={(e) => setEditing({ ...editing, href: e.target.value })} placeholder="https://…" />
+                  </Field>
+                  <Field label="description">
+                    <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.description ?? ""} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
+                  </Field>
+                  <Field label="tier">
+                    <select className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.tier ?? "Trusted"} onChange={(e) => setEditing({ ...editing, tier: e.target.value })}>
+                      {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="category">
+                    <select className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.category ?? "tools"} onChange={(e) => setEditing({ ...editing, category: e.target.value })}>
+                      {categories.map((c) => (
+                        <option key={c.key} value={c.key}>{c.icon ? `${c.icon} ` : ""}{c.label}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="icon URL">
+                    <input className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.icon ?? ""} onChange={(e) => setEditing({ ...editing, icon: e.target.value ? e.target.value : null })} placeholder="https://… (фавикон если пусто)" />
+                  </Field>
+                  <Field label="manual_rank">
+                    <input type="number" className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.manual_rank ?? ""} onChange={(e) => setEditing({ ...editing, manual_rank: e.target.value === "" ? null : Number(e.target.value) })} />
+                  </Field>
+                  <Field label="health">
+                    <select className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]" value={editing.health ?? "alive"} onChange={(e) => setEditing({ ...editing, health: e.target.value })}>
+                      {HEALTH.map((h) => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="is_top">
+                    <label className="flex items-center gap-2">
+                      <input type="checkbox" checked={!!editing.is_top} onChange={(e) => setEditing({ ...editing, is_top: e.target.checked })} />
+                      <span className="text-sm">в топе</span>
+                    </label>
+                  </Field>
+                </div>
+                <div className="flex gap-2 pt-3">
+                  <button onClick={submit} className="px-3 py-1.5 rounded border bg-foreground text-background text-sm cursor-pointer">Сохранить</button>
+                  <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded border text-sm cursor-pointer">Отмена</button>
+                </div>
+              </>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   )
 }
@@ -526,25 +546,22 @@ function CategoryOrderEditor({
   return (
     <div className="border rounded-lg bg-[var(--surface)] p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-medium">Порядок категорий</div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={clearAll}
-            disabled={!hasOverrides || saving}
-            className="px-2.5 py-1 text-xs rounded border disabled:opacity-40 cursor-pointer"
-          >
-            Сбросить
-          </button>
-          <button
-            type="button"
-            onClick={save}
-            disabled={saving}
-            className="px-2.5 py-1 text-xs rounded border bg-foreground text-background disabled:opacity-50 cursor-pointer"
-          >
-            {saving ? "Сохранение…" : "Сохранить"}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={clearAll}
+          disabled={!hasOverrides || saving}
+          className="px-2.5 py-1 text-xs rounded border disabled:opacity-40 cursor-pointer"
+        >
+          Сбросить
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          className="px-2.5 py-1 text-xs rounded border bg-foreground text-background disabled:opacity-50 cursor-pointer"
+        >
+          {saving ? "Сохранение…" : "Сохранить"}
+        </button>
       </div>
       <ul className="divide-y border rounded">
         {view.map((c, i) => (

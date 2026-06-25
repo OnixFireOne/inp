@@ -123,6 +123,7 @@ export function TvChart({ symbol, onLoadingChange }: TvChartProps) {
           autosize: true,
           hide_side_toolbar: false,
           hide_top_toolbar: false,
+          hide_volume: true,
           hide_legend: false,
           withdateranges: true,
           timezone: "Europe/Moscow",
