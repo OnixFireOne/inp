@@ -1,4 +1,5 @@
 import { AssetTable } from "@/components/AssetTable"
+import { HotCoinsBeeswarm } from "@/components/HotCoinsBeeswarm"
 import type { MarketsResponse } from "@/lib/types"
 import { INTERNAL_BASE_URL } from "@/lib/site"
 
@@ -17,9 +18,12 @@ export default async function Home() {
     // If SSR fails, AssetTable will fetch client-side as normal
   }
 
+  const coins = initialData?.rows ?? []
+
   return (
     <main className="min-h-screen pb-16">
       <div className="px-4 pt-4">
+        <HotCoinsBeeswarm coins={coins} />
         <AssetTable initialData={initialData} />
       </div>
     </main>

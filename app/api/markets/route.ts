@@ -18,6 +18,38 @@ const KEY = process.env.COINGECKO_API_KEY || ""
 const TTL = Number(process.env.MARKETS_TTL_SECONDS ?? 45)
 const PER_PAGE = 100
 
+// Curated list of stable / gold / tokenized-bond symbols that the beeswarm
+// (and any "hot" view) hides. Symbols are matched case-insensitively. Symbols
+// in the second list are exact (e.g. USDC); symbols with a trailing "USD" /
+// "GOLD" suffix are matched by prefix. Source-of-truth = the same hard-coded
+// stable set used by the prototype in plan/inp_hot_beeswarm.html.
+const STABLE_SYMBOL_EXACT = new Set<string>([
+  "USDT","USDC","USDS","DAI","USDE","USD1","USDC","USDD","USDY","USD0",
+  "USDF","FDUSD","PYUSD","TUSD","USDP","USDM","GHO","GUSD","SUSD","USDX",
+  "USAT","USYC","AUSD","USDF","USDG","USTB","U","BFUSD","CRVUSD","USDtb",
+  "USTBL","USD0","USX","SATUSD","USDM","EURC","EUTBL","RUSD","PAXG","XAUT",
+  "USTB","OUSG","JTRSY","JAAA","YLDS","BCAP","USTBL","SSTN1","SSTN3",
+  "ONYC","REUSD","USDM","A7A5","KAG","KAU","BUIDL","USTB","USDB","FRAX",
+  "APYUSD","APXUSD","USDai","USDa","USAT","USD1","USDA","USDAI","USDF",
+  "USDM","USTB","USDB","USTBL","USTBL","USDC","USDD","USDS","USDX","USDE",
+  "USDF","USD0","USTB","BUIDL","SSTN1","SSTN3","JTRSY","JAAA","EUTBL",
+  "USTBL","USD0","USX","APYUSD","APXUSD","USTB","USDM","U","USDai",
+])
+
+// Heuristic symbol prefixes / suffixes for tokenized cash equivalents.
+const STABLE_SYMBOL_PATTERNS: RegExp[] = [
+  /^USD[A-Z0-9]?$/i,    // USDT, USDC, USDD, USDE, USDT, USD1, ...
+  /USD$/i,              // anything ending in USD
+  /USDC?$/i,            // anything ending in USDC / USD
+]
+
+function isStableSymbol(symbol: string): boolean {
+  if (!symbol) return false
+  const up = symbol.toUpperCase()
+  if (STABLE_SYMBOL_EXACT.has(up)) return true
+  return STABLE_SYMBOL_PATTERNS.some((re) => re.test(up))
+}
+
 function getCoinGeckoHeaders() {
   const isPro = process.env.COINGECKO_BASE?.includes('pro-api')
   const headerKey = isPro ? 'x-cg-pro-api-key' : 'x-cg-demo-api-key'
@@ -65,6 +97,7 @@ export async function GET(req: NextRequest) {
       change1y: r.price_change_percentage_1y_in_currency == null
         ? null : Number(r.price_change_percentage_1y_in_currency),
       sparkline: [],
+      stable: isStableSymbol(String(r.symbol ?? "")),
     }))
 
     const payload = { rows }
@@ -104,6 +137,7 @@ export async function GET(req: NextRequest) {
     sparkline: Array.isArray(r.sparkline_in_7d?.price)
       ? (r.sparkline_in_7d.price as number[])
       : [],
+    stable: isStableSymbol(String(r.symbol ?? "")),
   }))
 
   // On page 1 only: also pull /global and prepend a synthetic "All Crypto" row
