@@ -82,6 +82,7 @@ interface Node {
   tx: number        // target x
   ty: number        // target y
   ty0: number       // un-flattened target y
+  showLabel: boolean // whether to draw floating label (symbol above + % below)
 }
 
 // -------------------------------------------------------------
@@ -123,7 +124,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const [mode, setMode] = useState<Mode>(() => (prefs0.mode as Mode) ?? "both")
   const [sizeMult, setSizeMult] = useState(() => prefs0.sizeMult ?? 1)
   const [unit, setUnit] = useState(() => prefs0.unit ?? 9)        // px/%
-  const [topN, setTopN] = useState(() => prefs0.topN ?? 200)
+  const ALLOWED_TOPN = [200, 300, 400] as const
+  const [topN, setTopN] = useState(() =>
+    (ALLOWED_TOPN as readonly number[]).includes(prefs0.topN as number) ? (prefs0.topN as number) : 200,
+  )
   const [showAll, setShowAll] = useState(() => prefs0.showAll ?? false)
   const [scaleType, setScaleType] = useState<"linear" | "log">(() => (prefs0.scaleType as "linear" | "log") ?? "linear")
   const [shape, setShape] = useState<"circle" | "hex">(() => (prefs0.shape as "circle" | "hex") ?? "hex")
@@ -251,6 +255,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     panX: 0,
     panY: 0,
     hoverIdx: -1,
+    hoverNode: null as Node | null,
     labelAlpha: 0,
     labelTarget: 1,
     raf: 0 as number,
@@ -500,9 +505,24 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
           tx: 0,
           ty: 0,
           ty0: 0,
+          showLabel: false,
         }
       })
       s.nodes = nodes
+      // Pick up to 3 extreme coins for floating labels, ensuring ≥10pp separation.
+      const SEP = 7
+      const MAX_LABELS = 3
+      for (const n of s.nodes) n.showLabel = false
+      const cand = s.nodes.slice().sort(
+        (a, b) => Math.abs(b.c.pct) - Math.abs(a.c.pct),
+      )
+      const taken: number[] = []
+      for (const n of cand) {
+        if (taken.length >= MAX_LABELS) break
+        if (taken.some((p) => Math.abs(p - n.c.pct) < SEP)) continue
+        n.showLabel = true
+        taken.push(n.c.pct)
+      }
       layoutTargets(s, p.flatten, p.density, p.unit, p.scaleType, p.sizeMult)
       for (const n of s.nodes) {
         const pr = prev[n.c.id]
@@ -725,7 +745,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       for (const n of s.nodes) {
         const pos = n.c.pct >= 0
         const pc = pos ? "#16c784" : "#ea3943"
-        const dist = Math.abs(n.c.pct) >= 15
+        const dist = n.showLabel
         const R = rot(n.x, n.y)
         if (dist) {
           ctx!.fillStyle = "#fff"
@@ -819,6 +839,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         s.panX = s.startPanX + dx
         s.panY = s.startPanY + dy
         s.hoverIdx = -1
+        s.hoverNode = null
         hideTip()
       }
     }
@@ -836,6 +857,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       const wx = (mx - s.panX) / s.zoom
       const wy = (my - s.panY) / s.zoom
       let found = -1
+      let foundNode: Node | null = null
       let bestD = Infinity
       for (const n of s.nodes) {
         const hr = Math.abs(n.c.pct) >= 15 ? Math.max(n.r + 9, 15) : n.r
@@ -846,30 +868,30 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         if (dd <= hr * hr && dd < bestD) {
           bestD = dd
           found = n.idx
+          foundNode = n
         }
       }
       s.hoverIdx = found
-      if (found >= 0) showTip(e, found)
+      s.hoverNode = foundNode
+      if (found >= 0) showTip(e, foundNode!)
       else hideTip()
     }
     function onCanvasMouseLeave() {
       s.hoverIdx = -1
+      s.hoverNode = null
       hideTip()
     }
     function onCanvasClick() {
       if (s.didDrag) return
-      if (s.hoverIdx < 0) return
-      const idx = s.hoverIdx
-      const coin = sourceCoins[idx]
-      if (!coin) return
+      if (!s.hoverNode) return
+      const coin = s.hoverNode.c
       // Open the existing intercepting modal at /asset/[id].
       // AssetRow uses the same pattern.
       router.push(`/asset/${encodeURIComponent(coin.id)}`, { scroll: false })
     }
 
-    function showTip(e: MouseEvent | MouseEvent, idx: number) {
-      const c = sourceCoins[idx]
-      if (!c) return
+    function showTip(e: MouseEvent, node: Node) {
+      const c = node.c
       const pos = c.pct >= 0
       tipEl!.innerHTML = `<b>${escapeHtml(c.symbol)}</b> ${escapeHtml(c.name)}<br><span style="color:${pos ? "#16c784" : "#ea3943"}">${fmtPct(c.pct)}</span> · ${fmtCap(c.marketCap)}`
       tipEl!.style.display = "block"
@@ -988,9 +1010,9 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         <h2 className="text-lg font-semibold tracking-tight">
           Горячие монеты — Beeswarm
         </h2>
-        <span className="text-xs text-[var(--text-mut)]">
-          24ч · топ-200 · стейблы скрыты
-        </span>
+          <span className="text-xs text-[var(--text-mut)]">
+            24ч · топ-{topN} · стейблы скрыты
+          </span>
       </div>
 
       {/* Chips */}
@@ -1059,18 +1081,26 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
           display={unit + " px/%"}
           onChange={setUnit}
         />
-        <SliderCtl
-          label="⏶ Монет"
-          min={30}
-          max={500}
-          step={10}
-          value={topN}
-          display={String(topN)}
-          onChange={(v) => {
-            setTopN(v)
-            layoutVersionRef.current++
-          }}
-        />
+        <div className="inline-flex items-center gap-2 text-xs text-[var(--text-mut)]">
+          <span>⏶ Монет</span>
+          <div className="inline-flex rounded-[10px] border border-[var(--border)] overflow-hidden bg-[var(--surface)]">
+            {([200, 300, 400] as const).map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => { setTopN(n); layoutVersionRef.current++ }}
+                className={
+                  "px-3 py-2 font-semibold transition " +
+                  (topN === n
+                    ? "bg-[var(--surface-2)] text-[var(--text)]"
+                    : "text-[var(--text-mut)] hover:text-[var(--text)]")
+                }
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <Toggle label="все %" checked={showAll} onChange={setShowAll} />
         <Toggle
