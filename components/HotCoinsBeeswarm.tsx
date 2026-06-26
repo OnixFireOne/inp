@@ -16,7 +16,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { useQueryClient } from "@tanstack/react-query"
 import type { MarketRow } from "@/lib/types"
+import { stashMarketRow, prefetchLinks } from "@/lib/prefetch"
 
 // -------------------------------------------------------------
 // Persisted user settings (localStorage)
@@ -114,6 +116,7 @@ function fmtPct(p: number) {
 // -------------------------------------------------------------
 export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps) {
   const router = useRouter()
+  const qc = useQueryClient()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const axisRef = useRef<HTMLCanvasElement | null>(null)
@@ -124,7 +127,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const [mode, setMode] = useState<Mode>(() => (prefs0.mode as Mode) ?? "both")
   const [sizeMult, setSizeMult] = useState(() => prefs0.sizeMult ?? 1)
   const [unit, setUnit] = useState(() => prefs0.unit ?? 9)        // px/%
-  const ALLOWED_TOPN = [200, 300, 400] as const
+  const ALLOWED_TOPN = [100, 200, 300, 400] as const
   const [topN, setTopN] = useState(() =>
     (ALLOWED_TOPN as readonly number[]).includes(prefs0.topN as number) ? (prefs0.topN as number) : 200,
   )
@@ -885,6 +888,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       if (s.didDrag) return
       if (!s.hoverNode) return
       const coin = s.hoverNode.c
+      // Stash the market row (with image) before navigating, so the modal header has it immediately.
+      const marketRow = rows.find((r) => r.id === coin.id)
+      if (marketRow) stashMarketRow(qc, marketRow)
+      prefetchLinks(qc, coin.id)
       // Open the existing intercepting modal at /asset/[id].
       // AssetRow uses the same pattern.
       router.push(`/asset/${encodeURIComponent(coin.id)}`, { scroll: false })
@@ -1084,7 +1091,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         <div className="inline-flex items-center gap-2 text-xs text-[var(--text-mut)]">
           <span>⏶ Монет</span>
           <div className="inline-flex rounded-[10px] border border-[var(--border)] overflow-hidden bg-[var(--surface)]">
-            {([200, 300, 400] as const).map((n) => (
+            {([100, 200, 300, 400] as const).map((n) => (
               <button
                 key={n}
                 type="button"
