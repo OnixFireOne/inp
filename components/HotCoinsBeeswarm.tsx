@@ -16,7 +16,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { useQueryClient } from "@tanstack/react-query"
 import type { MarketRow } from "@/lib/types"
+import { stashMarketRow, prefetchLinks } from "@/lib/prefetch"
 
 // -------------------------------------------------------------
 // Persisted user settings (localStorage)
@@ -114,6 +116,7 @@ function fmtPct(p: number) {
 // -------------------------------------------------------------
 export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps) {
   const router = useRouter()
+  const qc = useQueryClient()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const axisRef = useRef<HTMLCanvasElement | null>(null)
@@ -124,7 +127,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const [mode, setMode] = useState<Mode>(() => (prefs0.mode as Mode) ?? "both")
   const [sizeMult, setSizeMult] = useState(() => prefs0.sizeMult ?? 1)
   const [unit, setUnit] = useState(() => prefs0.unit ?? 9)        // px/%
-  const ALLOWED_TOPN = [200, 300, 400] as const
+  const ALLOWED_TOPN = [100, 200, 300, 400] as const
   const [topN, setTopN] = useState(() =>
     (ALLOWED_TOPN as readonly number[]).includes(prefs0.topN as number) ? (prefs0.topN as number) : 200,
   )
@@ -274,6 +277,12 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     startY: 0,
     startPanX: 0,
     startPanY: 0,
+    // Edge pins (screen-space indicators for off-screen nodes)
+    edgePins: [] as Array<{ x: number; y: number; r: number; node: Node }>,
+    // Default-view anchor (saved by fitView)
+    fitZoom: 1,
+    fitPanX: 0,
+    fitPanY: 0,
   })
 
   // Mirror latest slider values into a ref the loop reads.
@@ -771,6 +780,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       }
       ctx!.globalAlpha = 1
       ctx!.restore()
+      drawEdgePins()
       drawAxisStrip()
     }
 
@@ -784,27 +794,115 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
 
     // ---- zoom helpers ----------------------------------------
     function fitView(force = false) {
-      const vMode = paramsRef.current.orient === "v"
+      const p = paramsRef.current
+      const vMode = p.orient === "v"
       const W = s.cssW
       const H = s.cssH
       const pad = 46
-      const extentX = Math.max(s.worldMaxX - s.worldMinX, 1)
+      const stripBottom = vMode ? 0 : 30
+      const stripLeft = vMode ? AXIS_W : 0
+      // Толщина роя в мире — всегда extentY (ty±r). Ось значений (extentX) НЕ участвует.
       const extentY = Math.max(s.worldMaxY - s.worldMinY, 1)
-      const cw = vMode ? extentY : extentX
-      const ch = vMode ? extentX : extentY
-      const zoomW = (W - pad * 2) / cw
-      const zoomH = (H - 30 - pad * 2) / ch
-      s.zoom = clamp(Math.min(zoomW, zoomH), 0.12, 4)
-      const midX = (s.worldMinX + s.worldMaxX) / 2
-      const midY = (s.worldMinY + s.worldMaxY) / 2
-      const R = rot(midX, midY)
-      s.panX = W / 2 - R.x * s.zoom
-      s.panY = (H - 30) / 2 - R.y * s.zoom
+      // Короткая сторона экрана = поперёк оси значений.
+      const crossSize = vMode ? (W - stripLeft - pad * 2) : (H - stripBottom - pad * 2)
+      s.zoom = clamp(crossSize / extentY, 0.12, 4)
+      // Ноль (sxWorld(0)=0 ⇒ rot(0,0)={0,0}) — в центр рабочей области.
+      const cx = stripLeft + (W - stripLeft) / 2
+      const cy = (H - stripBottom) / 2
+      s.panX = cx
+      s.panY = cy
+      // эталон «дефолтного» кадра для определения выбросов
+      s.fitZoom = s.zoom
+      s.fitPanX = s.panX
+      s.fitPanY = s.panY
       if (force) {
         s.labelAlpha = 0
         s.labelTarget = 1
       }
     }
+
+    function drawEdgePins() {
+      const p = paramsRef.current
+      const vMode = p.orient === "v"
+      const stripBottom = vMode ? 0 : 30
+      const stripLeft = vMode ? AXIS_W : 0
+      const m = 12
+      const minX = stripLeft + m
+      const maxX = s.cssW - m
+      const minY = m
+      const maxY = s.cssH - stripBottom - m
+      s.edgePins = []
+      const buckets: Record<string, Node[]> = {}
+      for (const n of s.nodes) {
+        const R = rot(n.x, n.y)
+        // 1) текущий кадр — за краем ли сейчас?
+        const sx = s.panX + R.x * s.zoom
+        const sy = s.panY + R.y * s.zoom
+        const offCur = sx < minX || sx > maxX || sy < minY || sy > maxY
+        if (!offCur) continue
+        // 2) дефолтный кадр — настоящий ли это выброс?
+        const dx = s.fitPanX + R.x * s.fitZoom
+        const dy = s.fitPanY + R.y * s.fitZoom
+        const offDef = dx < minX || dx > maxX || dy < minY || dy > maxY
+        if (!offDef) continue
+        // дальше выбор края — по дефолтному выходу (стабильнее, не зависит от текущего пана)
+        const overL = minX - dx
+        const overR = dx - maxX
+        const overT = minY - dy
+        const overB = dy - maxY
+        const mo = Math.max(overL, overR, overT, overB)
+        const edge = mo === overL ? "L" : mo === overR ? "R" : mo === overT ? "T" : "B"
+        ;(buckets[edge] ||= []).push(n)
+      }
+      ctx!.textAlign = "center"
+      ctx!.textBaseline = "middle"
+      for (const edge in buckets) {
+        const arr = buckets[edge].sort(
+          (a, b) => Math.abs(b.c.pct) - Math.abs(a.c.pct),
+        )
+        const rep = arr[0]
+        const R = rot(rep.x, rep.y)
+        const sx = clamp(s.panX + R.x * s.zoom, minX, maxX)
+        const sy = clamp(s.panY + R.y * s.zoom, minY, maxY)
+        const col = rep.c.pct >= 0 ? GREEN : RED
+        const pr = 8
+        // кружок-пин
+        ctx!.beginPath()
+        ctx!.arc(sx, sy, pr, 0, Math.PI * 2)
+        ctx!.fillStyle = rgba(col, 0.92)
+        ctx!.fill()
+        ctx!.lineWidth = 1
+        ctx!.strokeStyle = "rgba(255,255,255,.65)"
+        ctx!.stroke()
+        // шеврон наружу (по краю)
+        const ax = edge === "L" ? -1 : edge === "R" ? 1 : 0
+        const ay = edge === "T" ? -1 : edge === "B" ? 1 : 0
+        ctx!.beginPath()
+        ctx!.moveTo(sx + ax * (pr + 5), sy + ay * (pr + 5))
+        ctx!.lineTo(sx + ax * pr - ay * 4, sy + ay * pr - ax * 4)
+        ctx!.lineTo(sx + ax * pr + ay * 4, sy + ay * pr + ax * 4)
+        ctx!.closePath()
+        ctx!.fillStyle = rgba(col, 0.92)
+        ctx!.fill()
+        // счётчик, если у края несколько
+        if (arr.length > 1) {
+          const bx = sx - ax * (pr + 9)
+          const by = sy - ay * (pr + 9)
+          ctx!.beginPath()
+          ctx!.arc(bx, by, 8, 0, Math.PI * 2)
+          ctx!.fillStyle = "rgba(11,14,20,.92)"
+          ctx!.fill()
+          ctx!.strokeStyle = rgba(col, 0.9)
+          ctx!.stroke()
+          ctx!.fillStyle = "#fff"
+          ctx!.font = "700 9px " + FONT
+          ctx!.fillText(String(arr.length), bx, by)
+        }
+        // радиус пина для хит-теста (с запасом, чтобы попадать и по бейджу)
+        s.edgePins.push({ x: sx, y: sy, r: Math.max(pr, 11), node: rep })
+      }
+    }
+
 
     function zoomAt(cx: number, cy: number, f: number) {
       const r = cv!.getBoundingClientRect()
@@ -854,6 +952,17 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       const r = cv!.getBoundingClientRect()
       const mx = e.clientX - r.left
       const my = e.clientY - r.top
+      // Edge-pins hit-test (screen space, before world transform)
+      for (const pin of s.edgePins) {
+        const dx = mx - pin.x
+        const dy = my - pin.y
+        if (dx * dx + dy * dy <= pin.r * pin.r) {
+          s.hoverNode = pin.node
+          s.hoverIdx = pin.node.idx
+          showTip(e, pin.node)
+          return
+        }
+      }
       const wx = (mx - s.panX) / s.zoom
       const wy = (my - s.panY) / s.zoom
       let found = -1
@@ -885,6 +994,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       if (s.didDrag) return
       if (!s.hoverNode) return
       const coin = s.hoverNode.c
+      // Stash the market row (with image) before navigating, so the modal header has it immediately.
+      const marketRow = rows.find((r) => r.id === coin.id)
+      if (marketRow) stashMarketRow(qc, marketRow)
+      prefetchLinks(qc, coin.id)
       // Open the existing intercepting modal at /asset/[id].
       // AssetRow uses the same pattern.
       router.push(`/asset/${encodeURIComponent(coin.id)}`, { scroll: false })
@@ -1084,7 +1197,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         <div className="inline-flex items-center gap-2 text-xs text-[var(--text-mut)]">
           <span>⏶ Монет</span>
           <div className="inline-flex rounded-[10px] border border-[var(--border)] overflow-hidden bg-[var(--surface)]">
-            {([200, 300, 400] as const).map((n) => (
+            {([100, 200, 300, 400] as const).map((n) => (
               <button
                 key={n}
                 type="button"
@@ -1337,6 +1450,10 @@ function ZoomButtons({
     cssW: number
     cssH: number
     orient: "h" | "v"
+    edgePins: Array<{ x: number; y: number; r: number; node: Node }>
+    fitZoom: number
+    fitPanX: number
+    fitPanY: number
   }>
   layoutVersionRef: React.RefObject<number>
 }) {
@@ -1360,19 +1477,18 @@ function ZoomButtons({
     if (W === 0 || H === 0) return
     const vMode = s.orient === "v"
     const pad = 46
-    const extentX = Math.max(s.worldMaxX - s.worldMinX, 1)
+    const stripBottom = vMode ? 0 : 30
+    const stripLeft = vMode ? AXIS_W : 0
     const extentY = Math.max(s.worldMaxY - s.worldMinY, 1)
-    const cw = vMode ? extentY : extentX
-    const ch = vMode ? extentX : extentY
-    const zoomW = (W - pad * 2) / cw
-    const zoomH = (H - 30 - pad * 2) / ch
-    s.zoom = Math.max(0.12, Math.min(4, Math.min(zoomW, zoomH)))
-    const midX = (s.worldMinX + s.worldMaxX) / 2
-    const midY = (s.worldMinY + s.worldMaxY) / 2
-    const rx = vMode ? -midY : midX
-    const ry = vMode ? -midX : midY
-    s.panX = W / 2 - rx * s.zoom
-    s.panY = (H - 30) / 2 - ry * s.zoom
+    const crossSize = vMode ? (W - stripLeft - pad * 2) : (H - stripBottom - pad * 2)
+    s.zoom = Math.max(0.12, Math.min(4, crossSize / extentY))
+    const cx = stripLeft + (W - stripLeft) / 2
+    const cy = (H - stripBottom) / 2
+    s.panX = cx
+    s.panY = cy
+    s.fitZoom = s.zoom
+    s.fitPanX = s.panX
+    s.fitPanY = s.panY
     // force a re-layout to ensure world bounds reflect the latest nodes
     layoutVersionRef.current++
   }
