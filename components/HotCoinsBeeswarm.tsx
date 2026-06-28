@@ -15,7 +15,7 @@
 //   • Tailwind controls (no inline CSS). Sliders live in useState.
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { useQueryClient } from "@tanstack/react-query"
 import type { MarketRow } from "@/lib/types"
 import { stashMarketRow, prefetchLinks } from "@/lib/prefetch"
@@ -23,7 +23,7 @@ import { stashMarketRow, prefetchLinks } from "@/lib/prefetch"
 // -------------------------------------------------------------
 // Persisted user settings (localStorage)
 // -------------------------------------------------------------
-const PREFS_KEY = "hcb_prefs_v1"
+const PREFS_KEY = "hcb_prefs_v2"
 // Ширина боковой полосы оси процентов при повороте (orient==="v").
 const AXIS_W = 46
 type Prefs = Partial<{
@@ -39,6 +39,8 @@ type Prefs = Partial<{
   density: number
   orient: string
   squeeze: number
+  pinAll: boolean
+  startView: string
 }>
 function readPrefs(): Prefs {
   if (typeof window === "undefined") return {}
@@ -116,11 +118,14 @@ function fmtPct(p: number) {
 // -------------------------------------------------------------
 export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps) {
   const router = useRouter()
+  const pathname = usePathname()
   const qc = useQueryClient()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const axisRef = useRef<HTMLCanvasElement | null>(null)
   const tipRef = useRef<HTMLDivElement | null>(null)
+  // Выбранная монета (только ref — draw() читает напрямую, без ре-рендера).
+  const selectedIdRef = useRef<string | null>(null)
 
   // -------------------- Slider state -----------------------------
   const prefs0 = useMemo(() => readPrefs(), [])
@@ -139,6 +144,8 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const [density, setDensity] = useState(() => prefs0.density ?? 1.4)
   const [squeeze, setSqueeze] = useState(() => prefs0.squeeze ?? 0) // 0..1 — сжатие пустых промежутков по краям
   const [orient, setOrient] = useState<"h" | "v">(() => (prefs0.orient as "h" | "v") ?? "h")
+  const [pinAll, setPinAll] = useState(() => prefs0.pinAll ?? true)
+  const [startView, setStartView] = useState<"equator" | "auto">(() => (prefs0.startView as "equator" | "auto") ?? "auto")
   const [panelOpen, setPanelOpen] = useState(false) // панель настроек свёрнута по умолчанию
   // Запоминаем настройки в localStorage и восстанавливаем при загрузке.
   useEffect(() => {
@@ -146,10 +153,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     try {
       window.localStorage.setItem(
         PREFS_KEY,
-        JSON.stringify({ mode, sizeMult, unit, topN, showAll, scaleType, shape, gravity, flatten, density, squeeze, orient }),
+        JSON.stringify({ mode, sizeMult, unit, topN, showAll, scaleType, shape, gravity, flatten, density, squeeze, orient, pinAll, startView }),
       )
     } catch {}
-  }, [mode, sizeMult, unit, topN, showAll, scaleType, shape, gravity, flatten, density, squeeze, orient])
+  }, [mode, sizeMult, unit, topN, showAll, scaleType, shape, gravity, flatten, density, squeeze, orient, pinAll, startView])
 
   // ---------------- Data layer: wider sample + on-demand paging ----------
   // The page hands us only the SSR'd page 1 (~100 rows, incl. the synthetic
@@ -299,6 +306,8 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     density,
     squeeze,
     orient,
+    pinAll,
+    startView,
   })
   useEffect(() => {
     paramsRef.current = {
@@ -314,6 +323,8 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       density,
       squeeze,
       orient,
+      pinAll,
+      startView,
     }
     stateRef.current.orient = orient
   }, [
@@ -329,12 +340,18 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     density,
     squeeze,
     orient,
+    pinAll,
+    startView,
   ])
 
   // Bumped on each "structural" change so the loop re-runs computeNodes
   // and re-fits the view. The watchInterval inside useEffect reads this
   // value and recomputes the node graph.
   const layoutVersionRef = useRef(0)
+  // Пользователь вручную панорамировал/зумил — отключает авто-подстройку вида под данные.
+  const userTouchedRef = useRef(false)
+  // Лейбл текущего масштаба (обновляется прямо в draw без ре-рендера).
+  const zoomLabelRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     // Any change to sliders/state — let the engine notice via the watcher.
@@ -352,8 +369,19 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     density,
     squeeze,
     orient,
+    pinAll,
+    startView,
   ])
 
+  // Сброс выделения монеты при ЗАКРЫТИИ drawer (карточки монеты).
+  // Drawer открывается через router.push("/asset/[id]") и закрывается через
+  // window.history.back() в app/@modal/(.)asset/[id]/page.tsx — поэтому
+  // pathname перестаёт начинаться с "/asset/". Других причин для сброса нет:
+  // не сбрасываем на смене режима / topN / зума / fit.
+  useEffect(() => {
+    const inDrawer = !!pathname?.startsWith("/asset/")
+    if (!inDrawer) selectedIdRef.current = null
+  }, [pathname])
   // =============================================================
   // Engine
   // =============================================================
@@ -748,13 +776,30 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
           ctx!.fill()
         }
       }
+      // Выделение выбранной монеты — только обводка, без затенения остальных.
+      // Рисуем после основного цикла нод, чтобы кольцо не перекрывалось соседями.
+      const selId = selectedIdRef.current
+      if (selId) {
+        const sel = s.nodes.find((n) => n.c.id === selId)
+        if (sel) {
+          const R = rot(sel.x, sel.y)
+          pathShape(R.x, R.y, sel.r, p.shape)
+          ctx!.shadowColor = "rgba(255,255,255,.5)"
+          ctx!.shadowBlur = 10
+          ctx!.strokeStyle = "rgba(255,255,255,.95)"
+          ctx!.lineWidth = 2.5
+          ctx!.stroke()
+          ctx!.shadowBlur = 0
+        }
+      }
       ctx!.globalAlpha = s.labelAlpha
       ctx!.textAlign = "center"
       ctx!.textBaseline = "alphabetic"
       for (const n of s.nodes) {
         const pos = n.c.pct >= 0
         const pc = pos ? "#16c784" : "#ea3943"
-        const dist = n.showLabel
+        const isSel = selId !== null && n.c.id === selId
+        const dist = n.showLabel || isSel
         const R = rot(n.x, n.y)
         if (dist) {
           ctx!.fillStyle = "#fff"
@@ -782,6 +827,9 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       ctx!.restore()
       drawEdgePins()
       drawAxisStrip()
+      if (zoomLabelRef.current) {
+        zoomLabelRef.current.textContent = Math.round((s.zoom / (s.fitZoom || s.zoom)) * 100) + "%"
+      }
     }
 
     function loop() {
@@ -801,16 +849,37 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       const pad = 46
       const stripBottom = vMode ? 0 : 30
       const stripLeft = vMode ? AXIS_W : 0
-      // Толщина роя в мире — всегда extentY (ty±r). Ось значений (extentX) НЕ участвует.
+      // БАЗА: красиво масштабируем ВСЮ высоту роя и центрируем по СЕРЕДИНЕ этой высоты
+      // (а не по нулю/экватору) — чтобы не резало ни верх, ни низ.
       const extentY = Math.max(s.worldMaxY - s.worldMinY, 1)
-      // Короткая сторона экрана = поперёк оси значений.
       const crossSize = vMode ? (W - stripLeft - pad * 2) : (H - stripBottom - pad * 2)
-      s.zoom = clamp(crossSize / extentY, 0.12, 4)
-      // Ноль (sxWorld(0)=0 ⇒ rot(0,0)={0,0}) — в центр рабочей области.
+      let zoom = clamp(crossSize / extentY, 0.12, 4)
       const cx = stripLeft + (W - stripLeft) / 2
       const cy = (H - stripBottom) / 2
-      s.panX = cx
-      s.panY = cy
+      const midY = (s.worldMinY + s.worldMaxY) / 2
+      const Rm = rot(0, midY)
+      let panX = cx - Rm.x * zoom
+      let panY = cy - Rm.y * zoom
+      // РЕЖИМ «Экватор+BTC»: поверх базового фита ПРОСТО ДОБАВЛЯЕМ зум к BTC
+      // и центрируем СЕРЕДИНУ отрезка «экватор (0) ↔ BTC». В режиме «Авто» — чистый fitView.
+      if (p.startView === "equator") {
+        const btc =
+          s.nodes.find((n) => n.c.symbol?.toUpperCase() === "BTC") ??
+          s.nodes.find((n) => n.rank === 0)
+        if (btc) {
+          // Авто-масштаб: подбираем зум так, чтобы BTC (с радиусом) НЕ резался,
+          // а экватор оставался виден. Половина нужного поперечного размаха =
+          // расстояние от середины отрезка до дальнего края BTC (|ty|/2 + r). Высота считается сама по данным.
+          const halfSpan = Math.abs(btc.ty) / 2 + btc.r
+          zoom = clamp((crossSize / 2) / (halfSpan * 1.12), 0.12, 9)
+          const Rb = rot(0, btc.ty / 2)
+          panX = cx - Rb.x * zoom
+          panY = cy - Rb.y * zoom
+        }
+      }
+      s.zoom = zoom
+      s.panX = panX
+      s.panY = panY
       // эталон «дефолтного» кадра для определения выбросов
       s.fitZoom = s.zoom
       s.fitPanX = s.panX
@@ -840,24 +909,30 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         const sy = s.panY + R.y * s.zoom
         const offCur = sx < minX || sx > maxX || sy < minY || sy > maxY
         if (!offCur) continue
-        // 2) дефолтный кадр — настоящий ли это выброс?
-        const dx = s.fitPanX + R.x * s.fitZoom
-        const dy = s.fitPanY + R.y * s.fitZoom
-        const offDef = dx < minX || dx > maxX || dy < minY || dy > maxY
-        if (!offDef) continue
-        // дальше выбор края — по дефолтному выходу (стабильнее, не зависит от текущего пана)
-        const overL = minX - dx
-        const overR = dx - maxX
-        const overT = minY - dy
-        const overB = dy - maxY
+        if (!p.pinAll) {
+          // Режим «только выбросы»: пинить лишь тех, кто не влез бы и в дефолтный кадр.
+          const dx = s.fitPanX + R.x * s.fitZoom
+          const dy = s.fitPanY + R.y * s.fitZoom
+          const offDef = dx < minX || dx > maxX || dy < minY || dy > maxY
+          if (!offDef) continue
+        }
+        // Выбор края — по ТЕКУЩЕМУ выходу за кадр: при зуме верхние уходят на верх (T), нижние — на низ (B), а не сваливаются по дефолтному кадру.
+        const overL = minX - sx
+        const overR = sx - maxX
+        const overT = minY - sy
+        const overB = sy - maxY
         const mo = Math.max(overL, overR, overT, overB)
         const edge = mo === overL ? "L" : mo === overR ? "R" : mo === overT ? "T" : "B"
-        ;(buckets[edge] ||= []).push(n)
+        // Раздельные стопки для зелёных и красных на одном крае (ключ = край + знак).
+        const sign = n.c.pct >= 0 ? "G" : "R"
+        const key = edge + ":" + sign
+        ;(buckets[key] ||= []).push(n)
       }
       ctx!.textAlign = "center"
       ctx!.textBaseline = "middle"
-      for (const edge in buckets) {
-        const arr = buckets[edge].sort(
+      for (const key in buckets) {
+        const edge = key[0]
+        const arr = buckets[key].sort(
           (a, b) => Math.abs(b.c.pct) - Math.abs(a.c.pct),
         )
         const rep = arr[0]
@@ -918,6 +993,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     // ---- event handlers --------------------------------------
     function onWheel(e: WheelEvent) {
       e.preventDefault()
+      userTouchedRef.current = true
       zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12)
     }
     function onMouseDown(e: MouseEvent) {
@@ -933,7 +1009,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       if (s.isDragging) {
         const dx = e.clientX - s.startX
         const dy = e.clientY - s.startY
-        if (Math.abs(dx) + Math.abs(dy) > 4) s.didDrag = true
+        if (Math.abs(dx) + Math.abs(dy) > 4) {
+          s.didDrag = true
+          userTouchedRef.current = true
+        }
         s.panX = s.startPanX + dx
         s.panY = s.startPanY + dy
         s.hoverIdx = -1
@@ -990,10 +1069,39 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       s.hoverNode = null
       hideTip()
     }
-    function onCanvasClick() {
+    function nodeAt(mx: number, my: number): Node | null {
+      for (const pin of s.edgePins) {
+        const dx = mx - pin.x
+        const dy = my - pin.y
+        if (dx * dx + dy * dy <= pin.r * pin.r) return pin.node
+      }
+      const wx = (mx - s.panX) / s.zoom
+      const wy = (my - s.panY) / s.zoom
+      let best: Node | null = null
+      let bestD = Infinity
+      for (const n of s.nodes) {
+        const hr = Math.abs(n.c.pct) >= 15 ? Math.max(n.r + 9, 15) : n.r
+        const R = rot(n.x, n.y)
+        const dx = wx - R.x
+        const dy = wy - R.y
+        const dd = dx * dx + dy * dy
+        if (dd <= hr * hr && dd < bestD) {
+          bestD = dd
+          best = n
+        }
+      }
+      return best
+    }
+    function onCanvasClick(e: MouseEvent) {
       if (s.didDrag) return
-      if (!s.hoverNode) return
-      const coin = s.hoverNode.c
+      // Резолвим монету по координатам клика: hoverNode может обнулиться микродвижением мыши при зажатой кнопке.
+      const r = cv!.getBoundingClientRect()
+      const node = s.hoverNode ?? nodeAt(e.clientX - r.left, e.clientY - r.top)
+      if (!node) return
+      const coin = node.c
+      // Выделяем монету (визуально) — отдельный ref, чтобы draw() читал напрямую.
+      // Повторный клик по этой же монете или выбор другой — просто перезаписывает id.
+      selectedIdRef.current = coin.id
       // Stash the market row (with image) before navigating, so the modal header has it immediately.
       const marketRow = rows.find((r) => r.id === coin.id)
       if (marketRow) stashMarketRow(qc, marketRow)
@@ -1044,17 +1152,20 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     // ---- Re-run computeNodes whenever the underlying coin list
     // changes OR the user-driven layoutVersion bumps (mode/topN/etc).
     let lastOrient = paramsRef.current.orient
+    let lastStartView = paramsRef.current.startView
+    let lastScale = paramsRef.current.scaleType
     const watchInterval = window.setInterval(() => {
       if (layoutVersionRef.current !== lastVersion) {
         lastVersion = layoutVersionRef.current
         computeNodes()
         const orientChanged = paramsRef.current.orient !== lastOrient
+        const startViewChanged = paramsRef.current.startView !== lastStartView
+        const scaleChanged = paramsRef.current.scaleType !== lastScale
         lastOrient = paramsRef.current.orient
-        if (
-          orientChanged ||
-          paramsRef.current.mode !== "both" ||
-          (paramsRef.current.scaleType === "log") !== false
-        ) {
+        lastStartView = paramsRef.current.startView
+        lastScale = paramsRef.current.scaleType
+        // Пока пользователь сам не трогал вид — пере-подгоняем при каждой догрузке монет.
+        if (orientChanged || startViewChanged || scaleChanged || !userTouchedRef.current) {
           fitView(true)
         }
       }
@@ -1113,8 +1224,8 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
           <button
             type="button"
             onClick={() => setPanelOpen(false)}
-            aria-label="Свернуть настройки"
-            title="Свернуть"
+            aria-label="Collapse settings"
+            title="Collapse"
             className="absolute top-3 right-3 z-[7] w-[34px] h-[34px] rounded-[9px] border border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface)] text-[var(--text)] text-base leading-none"
           >
             ✕
@@ -1155,9 +1266,9 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         <div className="flex gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1">
           {(
             [
-              { v: "both", label: "Все", cls: "" },
-              { v: "gainers", label: "Растущие", cls: "text-emerald-500" },
-              { v: "losers", label: "Падающие", cls: "text-rose-500" },
+              { v: "both", label: "All", cls: "" },
+              { v: "gainers", label: "Gainers", cls: "text-emerald-500" },
+              { v: "losers", label: "Losers", cls: "text-rose-500" },
             ] as const
           ).map((opt) => (
             <button
@@ -1216,6 +1327,30 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         </div>
 
         <Toggle label="все %" checked={showAll} onChange={setShowAll} />
+        <Toggle label="📌 Пины: всё за краем" checked={pinAll} onChange={setPinAll} />
+        <div className="inline-flex items-center gap-2 text-xs text-[var(--text-mut)]">
+          <span>🎯 Старт</span>
+          <div className="inline-flex rounded-[10px] border border-[var(--border)] overflow-hidden bg-[var(--surface)]">
+            {([["equator", "Экватор+BTC"], ["auto", "Автомасштаб"]] as const).map(([v, lbl]) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => {
+                  setStartView(v)
+                  layoutVersionRef.current++
+                }}
+                className={
+                  "px-3 py-2 text-xs font-semibold transition " +
+                  (startView === v
+                    ? "bg-[var(--surface-2)] text-[var(--text)]"
+                    : "text-[var(--text-mut)] hover:text-[var(--text)]")
+                }
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
         <Toggle
           label="сжатая шкала"
           checked={scaleType === "log"}
@@ -1248,7 +1383,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
             layoutVersionRef.current++
           }}
           aria-pressed={orient === "v"}
-          title="Повернуть график на 90° (нажмите ещё раз, чтобы вернуть)"
+          title="Rotate chart 90° (click again to revert)"
           className={
             "flex items-center gap-1.5 text-xs font-semibold rounded-[10px] px-3 py-2 border transition " +
             (orient === "v"
@@ -1333,9 +1468,9 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         )}
         <button
           type="button"
-          aria-label="Настройки графика"
+          aria-label="Chart settings"
           aria-pressed={panelOpen}
-          title="Настройки графика"
+          title="Chart settings"
           onClick={() => setPanelOpen((o) => !o)}
           className="absolute bottom-10 right-3 z-[6] w-[34px] h-[34px] rounded-[9px] border border-[var(--border)] bg-[rgba(11,14,20,.82)] hover:bg-[rgba(40,50,74,.9)] text-[var(--text)] text-base leading-none"
         >
@@ -1346,6 +1481,8 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
           canvasRef={canvasRef}
           stateRef={stateRef}
           layoutVersionRef={layoutVersionRef}
+          userTouchedRef={userTouchedRef}
+          zoomLabelRef={zoomLabelRef}
         />
       </div>
 
@@ -1435,9 +1572,13 @@ function ZoomButtons({
   canvasRef,
   stateRef,
   layoutVersionRef,
+  userTouchedRef,
+  zoomLabelRef,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>
   canvasRef: React.RefObject<HTMLCanvasElement | null>
+  userTouchedRef: React.RefObject<boolean>
+  zoomLabelRef: React.RefObject<HTMLDivElement | null>
   stateRef: React.RefObject<{
     zoom: number
     panX: number
@@ -1472,24 +1613,12 @@ function ZoomButtons({
   }
   function fit() {
     const s = stateRef.current
-    const W = s.cssW
-    const H = s.cssH
-    if (W === 0 || H === 0) return
-    const vMode = s.orient === "v"
-    const pad = 46
-    const stripBottom = vMode ? 0 : 30
-    const stripLeft = vMode ? AXIS_W : 0
-    const extentY = Math.max(s.worldMaxY - s.worldMinY, 1)
-    const crossSize = vMode ? (W - stripLeft - pad * 2) : (H - stripBottom - pad * 2)
-    s.zoom = Math.max(0.12, Math.min(4, crossSize / extentY))
-    const cx = stripLeft + (W - stripLeft) / 2
-    const cy = (H - stripBottom) / 2
-    s.panX = cx
-    s.panY = cy
-    s.fitZoom = s.zoom
-    s.fitPanX = s.panX
-    s.fitPanY = s.panY
-    // force a re-layout to ensure world bounds reflect the latest nodes
+    if (s.cssW === 0 || s.cssH === 0) return
+    // Единый путь подгона. Раньше здесь было ВТОРОЕ отдельное центрирование (по нулю),
+    // которое расходилось с fitView (по середине высоты) — отсюда «двойной подгон»/дёрганье.
+    // Теперь просто сбрасываем флаг ручного управления и просим движок пере-подогнать
+    // тем же самым fitView через watchInterval.
+    userTouchedRef.current = false
     layoutVersionRef.current++
   }
   return (
@@ -1500,6 +1629,7 @@ function ZoomButtons({
         onClick={() => {
           const cv = canvasRef.current
           if (!cv) return
+          userTouchedRef.current = true
           const r = cv.getBoundingClientRect()
           zoomAtClient(r.left + r.width / 2, r.top + r.height / 2, 1.25)
         }}
@@ -1513,6 +1643,7 @@ function ZoomButtons({
         onClick={() => {
           const cv = canvasRef.current
           if (!cv) return
+          userTouchedRef.current = true
           const r = cv.getBoundingClientRect()
           zoomAtClient(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.25)
         }}
@@ -1520,11 +1651,18 @@ function ZoomButtons({
       >
         −
       </button>
+      <div
+        ref={zoomLabelRef}
+        title="Current zoom (100% = fit view)"
+        className="min-w-[34px] text-center text-[10px] font-semibold text-[var(--text-mut)] tabular-nums select-none px-1 py-0.5 rounded-[7px] bg-[rgba(11,14,20,.82)] border border-[var(--border)]"
+      >
+        100%
+      </div>
       <button
         type="button"
         aria-label="Fit view"
         onClick={fit}
-        title="Авто-вид"
+        title="Fit view"
         className="w-[34px] h-[34px] rounded-[9px] border border-[var(--border)] bg-[rgba(11,14,20,.82)] hover:bg-[rgba(40,50,74,.9)] text-[var(--text)] text-base leading-none"
       >
         ⤢

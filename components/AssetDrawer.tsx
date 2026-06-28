@@ -115,6 +115,7 @@ function DesktopDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerP
             <AssetOverview
               asset={data?.asset ?? null}
               links={data?.links ?? []}
+              categories={data?.categories}
               market={market}
               isLoading={isLoading}
               variant="drawer"

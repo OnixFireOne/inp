@@ -7,7 +7,7 @@
 // and returns. The admin caller also invalidates the browser-side RQ cache.
 
 import { NextRequest } from "next/server"
-import { kvDel } from "@/lib/kv"
+import { kvDel, kvGet } from "@/lib/kv"
 import { supabaseServer } from "@/lib/supabase/server"
 
 async function assertAdmin(): Promise<boolean> {
@@ -50,7 +50,14 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  await Promise.all(Array.from(ids).map((cg) => kvDel(`links:${cg}`)))
+  const version = await kvGet<number>("links:cache_version")
+  const v = typeof version === "number" ? version : 0
+  await Promise.all(
+    Array.from(ids).flatMap((cg) => [
+      kvDel(`links:${cg}`),
+      kvDel(`links:v${v}:${cg}`),
+    ]),
+  )
 
   return new Response(JSON.stringify({ ok: true, invalidated: Array.from(ids) }), {
     status: 200,
