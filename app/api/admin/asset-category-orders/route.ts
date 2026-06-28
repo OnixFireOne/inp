@@ -11,7 +11,7 @@
 // new sort order.
 
 import { NextRequest } from "next/server"
-import { kvDel } from "@/lib/kv"
+import { kvDel, kvGet } from "@/lib/kv"
 import { supabaseServer } from "@/lib/supabase/server"
 
 async function assertAdmin(): Promise<boolean> {
@@ -95,9 +95,12 @@ export async function POST(req: NextRequest) {
 
   if (updErr) return bad(updErr.message, 500)
 
-  // Invalidate the per-asset links cache.
+  // Invalidate the per-asset links cache (both legacy and versioned keys).
   if (assetRow.coingecko_id) {
     await kvDel(`links:${assetRow.coingecko_id}`)
+    const version = await kvGet<number>("links:cache_version")
+    const v = typeof version === "number" ? version : 0
+    await kvDel(`links:v${v}:${assetRow.coingecko_id}`)
   }
 
   return new Response(

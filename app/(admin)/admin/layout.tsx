@@ -1,8 +1,15 @@
 // app/(admin)/admin/layout.tsx
-// Server-side guard: require a logged-in user with profiles.role='admin'.
-// The lightweight auth check lives in middleware.ts; THIS is the authoritative
-// role check. If it fails, we redirect (notFound is a UX choice — redirect
-// keeps the URL stable and tells the user where to go).
+// Authoritative auth + role check lives in proxy.ts (see comment there for
+// why: Server Components can't write cookies, so the Supabase session
+// refresh crashes here if we try). Proxy already gates /admin/:path* AND
+// /api/admin/:path*, so anything that reaches this layout has been
+// verified. We keep a defence-in-depth second layer here: even if a future
+// change to the matcher accidentally lets a non-admin route through, this
+// layout will still redirect.
+//
+// getUser() (not getSession()) — Supabase explicitly warns that
+// getSession() on the server trusts the cookie without verifying the JWT
+// signature, so it cannot be used as authz.
 import { redirect } from "next/navigation"
 import { supabaseServer } from "@/lib/supabase/server"
 import { AdminProviders } from "./providers"
@@ -13,7 +20,6 @@ export default async function AdminLayout({
   children: React.ReactNode
 }) {
   const sb = await supabaseServer()
-
   const {
     data: { user },
   } = await sb.auth.getUser()
@@ -22,6 +28,7 @@ export default async function AdminLayout({
     redirect("/auth/signin?next=/admin")
   }
 
+  // Role lives in DB, not JWT — single index-lookup.
   const { data: profile } = await sb
     .from("profiles")
     .select("role")
@@ -29,7 +36,6 @@ export default async function AdminLayout({
     .single()
 
   if (!profile || profile.role !== "admin") {
-    // Logged in but not an admin. Send back home; don't leak the admin UI.
     redirect("/")
   }
 

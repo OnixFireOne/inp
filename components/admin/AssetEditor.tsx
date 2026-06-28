@@ -16,6 +16,7 @@ import { useOne, type HttpError } from "@refinedev/core"
 import { useQueryClient } from "@tanstack/react-query"
 import { LinksEditor } from "./LinksEditor"
 import { linksQueryKey } from "@/lib/prefetch"
+import { adminFetch } from "@/lib/admin/fetch"
 import type { MarketRow } from "@/lib/types"
 
 type Described = {
@@ -106,11 +107,12 @@ export function AssetEditor({
     const previousCg = (existing?.coingecko_id ?? market.id) as string
     await onFinish(values)
     try {
-      await fetch("/api/admin/revalidate-links", {
+      // 401 -> adminFetch redirects to /auth/signin.
+      // 403 / 5xx -> best-effort; the asset write succeeded regardless.
+      await adminFetch("/api/admin/revalidate-links", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ cg: previousCg }),
-        cache: "no-store",
       })
     } catch { /* best-effort */ }
     queryClient.invalidateQueries({ queryKey: linksQueryKey(previousCg) })
