@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
       return json({ ok: false, error: "already materialized" }, 409)
     }
 
-    await ensureAssetStub(coin)
+    await ensureAssetStub(coin, marketRow)
     await ensureAssetMeta(coin, { force: true, wait: true })
 
     asset = await loadAsset(supabase, coin)

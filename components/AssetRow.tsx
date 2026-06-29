@@ -3,7 +3,7 @@
 // AssetRow — single market row.
 // Interactions:
 //   • Hover the row → prefetchLinks (warm RQ cache with same queryKey as drawer).
-//   • Click anywhere on the row → router.push(/asset/[id]) → intercepted modal.
+//   • Click anywhere on the row → open /asset/[id] in the intercepted modal.
 //   • Click the sparkline cell → open ChartModal (stops propagation).
 
 import { useQueryClient } from "@tanstack/react-query"
@@ -14,7 +14,7 @@ import { MarketCapCell } from "./MarketCapCell"
 import type { MarketRow, SparkWindow } from "@/lib/types"
 import { warmTradingView } from "@/components/TvChart"
 import { prefetchLinks, stashMarketRow, linksQueryKey, fetchLinksPayload } from "@/lib/prefetch"
-import { useRouter, usePathname } from "next/navigation"
+import { useOpenAsset } from "@/lib/useOpenAsset"
 
 interface AssetRowProps {
   row: MarketRow
@@ -33,19 +33,13 @@ export function AssetRow({
   show1y = false,
   onOpenChart,
 }: AssetRowProps) {
-  const router = useRouter()
-  const pathname = usePathname()
+  const openAsset = useOpenAsset()
   const qc = useQueryClient()
   const isAll = row.id === "all"
   const positive = row.change24h >= 0
 
   function handleOpenDrawer() {
-    stashMarketRow(qc, row)
-    if (pathname?.startsWith("/asset/")) {
-      router.replace(`/asset/${row.id}`, { scroll: false })
-    } else {
-      router.push(`/asset/${row.id}`, { scroll: false })
-    }
+    openAsset(row)
   }
 
   async function handleOpenChart(e: React.MouseEvent) {

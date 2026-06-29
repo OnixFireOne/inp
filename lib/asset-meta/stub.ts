@@ -1,24 +1,38 @@
 // lib/asset-meta/stub.ts
-// Idempotent minimal stub of the `assets` row required by the FK on
-// asset_meta.asset_id. Aspect 4 only needs the id/coingecko_id/status
-// triple; the rich name/ticker/icon backfill happens in the storefront
-// route (Aspect 5).
-// See plan/link-templates-spec.md, section "Аспект 4.2" + "Аспект 6.1".
+// Idempotent stub of the `assets` row required by the FK on
+// asset_meta.asset_id. `assets.name` is NOT NULL in production, so the stub
+// must include display fields from the already-warmed market row when possible.
+//
+// on conflict do nothing — never overwrite an existing described row.
+// See plan/link-templates-spec.md, sections "Аспект 4.2" + "Аспект 6.1".
 
+import { getMarketRowFromCache } from "./markets-allowlist"
+import type { MarketRow } from "../types"
 import { supabaseServer } from "../supabase/server"
 
-export async function ensureAssetStub(cg: string): Promise<void> {
+export async function ensureAssetStub(
+  cg: string,
+  marketRow?: MarketRow | null,
+): Promise<void> {
   const supabase = await supabaseServer()
-  // on conflict do nothing — never overwrite an existing described row.
+  const row = marketRow ?? (await getMarketRowFromCache(cg))
+
   const { error } = await supabase
     .from("assets")
     .upsert(
-      { id: cg, coingecko_id: cg, status: "template" },
+      {
+        id: cg,
+        coingecko_id: cg,
+        status: "template",
+        name: row?.name ?? cg,
+        // Keep the fallback non-null so environments where ticker is NOT NULL
+        // don't fail the FK precondition for asset_meta.
+        ticker: row?.symbol ?? cg.toUpperCase(),
+        icon: row?.image ?? null,
+      },
       { onConflict: "id", ignoreDuplicates: true },
     )
   if (error) {
-    // Don't throw — caller (ensureAssetMeta) treats errors as best-effort.
-    // We log to the console so the admin can spot a broken FK / RLS.
-    console.warn("[asset-meta] ensureAssetStub failed", cg, error.message)
+    console.error("[asset-meta] ensureAssetStub failed", cg, error.message)
   }
 }

@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ensureAssetMeta, __internal } from "./ensure"
 
+const allowlistMocks = vi.hoisted(() => ({
+  allowed: true,
+  warmCalls: 0,
+  warmResult: null as null | { id: string },
+}))
+
 vi.mock("../kv", () => {
   const store = new Map<string, unknown>()
   return {
@@ -66,7 +72,28 @@ vi.mock("../supabase/server", () => ({
 }))
 
 vi.mock("./markets-allowlist", () => ({
-  isAllowedCgId: async (_id: string) => true,
+  isAllowedCgId: async (_id: string) => allowlistMocks.allowed,
+  getMarketRowFromCache: async (_id: string) =>
+    allowlistMocks.warmResult
+      ? {
+          id: allowlistMocks.warmResult.id,
+          rank: 1,
+          name: allowlistMocks.warmResult.id,
+          symbol: allowlistMocks.warmResult.id.toUpperCase(),
+          image: "",
+          price: 1,
+          marketCap: 1,
+          change24h: 0,
+          sparkline: [],
+        }
+      : null,
+}))
+
+vi.mock("./markets-warm", () => ({
+  warmMarketRow: async (_id: string) => {
+    allowlistMocks.warmCalls += 1
+    return allowlistMocks.warmResult
+  },
 }))
 
 vi.mock("./bust-link-cache", () => ({
@@ -78,6 +105,9 @@ const RAW = { links: { homepage: ["https://bitcoin.org"] } }
 beforeEach(() => {
   upsertCalls.length = 0
   drainSelects()
+  allowlistMocks.allowed = true
+  allowlistMocks.warmCalls = 0
+  allowlistMocks.warmResult = null
   vi.unstubAllGlobals()
 })
 
@@ -106,6 +136,43 @@ describe("ensureAssetMeta", () => {
     expect((upsertCalls[1].values as { provider: string }).provider).toBe(
       "coingecko",
     )
+  })
+
+  it("warms a cold market row under the lock+budget before fetching snapshot", async () => {
+    allowlistMocks.allowed = false
+    allowlistMocks.warmResult = { id: "velvet" }
+    queueSelect(null) // freshness check → none
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify(RAW), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    )
+
+    const out = await ensureAssetMeta("velvet", { wait: true })
+
+    expect(out.status).toBe("fetched")
+    expect(allowlistMocks.warmCalls).toBe(1)
+    expect(upsertCalls.map((c) => c.table)).toEqual(["assets", "asset_meta"])
+  })
+
+  it("negative-caches a real cold market miss and does not create a stub", async () => {
+    allowlistMocks.allowed = false
+    allowlistMocks.warmResult = null
+    queueSelect(null) // freshness check → none
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify(RAW), { status: 200 }))
+    vi.stubGlobal("fetch", fetchSpy)
+
+    const out = await ensureAssetMeta("ghost", { wait: true })
+
+    expect(out.status).toBe("forbidden")
+    expect(allowlistMocks.warmCalls).toBe(1)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(upsertCalls).toHaveLength(0)
   })
 
   it("returns 'fresh' when the DB row is younger than TTL", async () => {

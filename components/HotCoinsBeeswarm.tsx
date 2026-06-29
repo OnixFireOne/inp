@@ -7,7 +7,7 @@
 //     fields are guaranteed in sync with the table below it.
 //
 //   • Engine: rAF loop with spring physics + collision resolution + zoom/pan
-//     + hover + click-to-open (router.push(/asset/[id]) → intercepted modal).
+//     + hover + click-to-open (/asset/[id] → intercepted modal).
 //
 //   • All canvas / window / devicePixelRatio access is inside useEffect —
 //     no SSR-time access. Cleanup cancels rAF and detaches every listener.
@@ -15,15 +15,17 @@
 //   • Tailwind controls (no inline CSS). Sliders live in useState.
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { usePathname, useRouter } from "next/navigation"
+import { usePathname } from "next/navigation"
 import { useQueryClient } from "@tanstack/react-query"
 import type { MarketRow } from "@/lib/types"
-import { stashMarketRow, prefetchLinks } from "@/lib/prefetch"
+import { prefetchLinks } from "@/lib/prefetch"
+import { useOpenAsset } from "@/lib/useOpenAsset"
 
 // -------------------------------------------------------------
 // Persisted user settings (localStorage)
 // -------------------------------------------------------------
 const PREFS_KEY = "hcb_prefs_v2"
+const ALLOWED_TOPN = [100, 200, 300, 400] as const
 // Ширина боковой полосы оси процентов при повороте (orient==="v").
 const AXIS_W = 46
 type Prefs = Partial<{
@@ -117,38 +119,42 @@ function fmtPct(p: number) {
 // Component
 // -------------------------------------------------------------
 export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps) {
-  const router = useRouter()
+  const openAsset = useOpenAsset()
   const pathname = usePathname()
   const qc = useQueryClient()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const axisRef = useRef<HTMLCanvasElement | null>(null)
   const tipRef = useRef<HTMLDivElement | null>(null)
+  const openAssetRef = useRef(openAsset)
   // Выбранная монета (только ref — draw() читает напрямую, без ре-рендера).
   const selectedIdRef = useRef<string | null>(null)
 
-  // -------------------- Slider state -----------------------------
-  const prefs0 = useMemo(() => readPrefs(), [])
-  const [mode, setMode] = useState<Mode>(() => (prefs0.mode as Mode) ?? "both")
-  const [sizeMult, setSizeMult] = useState(() => prefs0.sizeMult ?? 1)
-  const [unit, setUnit] = useState(() => prefs0.unit ?? 9)        // px/%
-  const ALLOWED_TOPN = [100, 200, 300, 400] as const
-  const [topN, setTopN] = useState(() =>
-    (ALLOWED_TOPN as readonly number[]).includes(prefs0.topN as number) ? (prefs0.topN as number) : 200,
-  )
-  const [showAll, setShowAll] = useState(() => prefs0.showAll ?? false)
-  const [scaleType, setScaleType] = useState<"linear" | "log">(() => (prefs0.scaleType as "linear" | "log") ?? "linear")
-  const [shape, setShape] = useState<"circle" | "hex">(() => (prefs0.shape as "circle" | "hex") ?? "hex")
-  const [gravity, setGravity] = useState(() => prefs0.gravity ?? 0.02)
-  const [flatten, setFlatten] = useState(() => prefs0.flatten ?? 0)  // 0..1
-  const [density, setDensity] = useState(() => prefs0.density ?? 1.4)
-  const [squeeze, setSqueeze] = useState(() => prefs0.squeeze ?? 0) // 0..1 — сжатие пустых промежутков по краям
-  const [orient, setOrient] = useState<"h" | "v">(() => (prefs0.orient as "h" | "v") ?? "h")
-  const [pinAll, setPinAll] = useState(() => prefs0.pinAll ?? true)
-  const [startView, setStartView] = useState<"equator" | "auto">(() => (prefs0.startView as "equator" | "auto") ?? "auto")
-  const [panelOpen, setPanelOpen] = useState(false) // панель настроек свёрнута по умолчанию
-  // Запоминаем настройки в localStorage и восстанавливаем при загрузке.
   useEffect(() => {
+    openAssetRef.current = openAsset
+  }, [openAsset])
+
+  // -------------------- Slider state -----------------------------
+  const [mode, setMode] = useState<Mode>("both")
+  const [sizeMult, setSizeMult] = useState(1)
+  const [unit, setUnit] = useState(9)        // px/%
+  const [topN, setTopN] = useState(200)
+  const [showAll, setShowAll] = useState(false)
+  const [scaleType, setScaleType] = useState<"linear" | "log">("linear")
+  const [shape, setShape] = useState<"circle" | "hex">("hex")
+  const [gravity, setGravity] = useState(0.02)
+  const [flatten, setFlatten] = useState(0)  // 0..1
+  const [density, setDensity] = useState(1.4)
+  const [squeeze, setSqueeze] = useState(0) // 0..1 — сжатие пустых промежутков по краям
+  const [orient, setOrient] = useState<"h" | "v">("h")
+  const [pinAll, setPinAll] = useState(true)
+  const [startView, setStartView] = useState<"equator" | "auto">("auto")
+  const [prefsLoaded, setPrefsLoaded] = useState(false)
+  const [panelOpen, setPanelOpen] = useState(false) // панель настроек свёрнута по умолчанию
+
+  // Запоминаем настройки в localStorage после восстановления, чтобы не затереть сохранённые дефолтами.
+  useEffect(() => {
+    if (!prefsLoaded) return
     if (typeof window === "undefined") return
     try {
       window.localStorage.setItem(
@@ -156,7 +162,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         JSON.stringify({ mode, sizeMult, unit, topN, showAll, scaleType, shape, gravity, flatten, density, squeeze, orient, pinAll, startView }),
       )
     } catch {}
-  }, [mode, sizeMult, unit, topN, showAll, scaleType, shape, gravity, flatten, density, squeeze, orient, pinAll, startView])
+  }, [prefsLoaded, mode, sizeMult, unit, topN, showAll, scaleType, shape, gravity, flatten, density, squeeze, orient, pinAll, startView])
 
   // ---------------- Data layer: wider sample + on-demand paging ----------
   // The page hands us only the SSR'd page 1 (~100 rows, incl. the synthetic
@@ -181,8 +187,13 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   }
 
   const [rows, setRows] = useState<MarketRow[]>(() => mergeRows(coins))
+  const rowsRef = useRef(rows)
   const loadedPagesRef = useRef(coins.length > 0 ? 1 : 0)
   const loadingRef = useRef(false)
+
+  useEffect(() => {
+    rowsRef.current = rows
+  }, [rows])
 
   // Re-seed if the parent re-supplies page 1 (e.g. SSR revalidate). Keeps any
   // deeper pages we already fetched.
@@ -352,6 +363,27 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const userTouchedRef = useRef(false)
   // Лейбл текущего масштаба (обновляется прямо в draw без ре-рендера).
   const zoomLabelRef = useRef<HTMLDivElement | null>(null)
+
+  // Restore saved settings only after mount so the first client render matches SSR.
+  useEffect(() => {
+    const p = readPrefs()
+    if (p.mode) setMode(p.mode as Mode)
+    if (p.sizeMult != null) setSizeMult(p.sizeMult)
+    if (p.unit != null) setUnit(p.unit)
+    if ((ALLOWED_TOPN as readonly number[]).includes(p.topN as number)) setTopN(p.topN as number)
+    if (p.showAll != null) setShowAll(p.showAll)
+    if (p.scaleType) setScaleType(p.scaleType as "linear" | "log")
+    if (p.shape) setShape(p.shape as "circle" | "hex")
+    if (p.gravity != null) setGravity(p.gravity)
+    if (p.flatten != null) setFlatten(p.flatten)
+    if (p.density != null) setDensity(p.density)
+    if (p.squeeze != null) setSqueeze(p.squeeze)
+    if (p.orient) setOrient(p.orient as "h" | "v")
+    if (p.pinAll != null) setPinAll(p.pinAll)
+    if (p.startView) setStartView(p.startView as "equator" | "auto")
+    layoutVersionRef.current++
+    setPrefsLoaded(true)
+  }, [])
 
   useEffect(() => {
     // Any change to sliders/state — let the engine notice via the watcher.
@@ -1103,12 +1135,11 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       // Повторный клик по этой же монете или выбор другой — просто перезаписывает id.
       selectedIdRef.current = coin.id
       // Stash the market row (with image) before navigating, so the modal header has it immediately.
-      const marketRow = rows.find((r) => r.id === coin.id)
-      if (marketRow) stashMarketRow(qc, marketRow)
+      const marketRow = rowsRef.current.find((r) => r.id === coin.id)
       prefetchLinks(qc, coin.id)
       // Open the existing intercepting modal at /asset/[id].
       // AssetRow uses the same pattern.
-      router.push(`/asset/${encodeURIComponent(coin.id)}`, { scroll: false })
+      openAssetRef.current(marketRow ?? coin.id)
     }
 
     function showTip(e: MouseEvent, node: Node) {
