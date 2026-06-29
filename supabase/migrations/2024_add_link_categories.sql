@@ -22,14 +22,14 @@ create policy link_categories_admin_write on public.link_categories
 
 -- сид текущими значениями
 insert into public.link_categories (key, label, sort) values
-  ('trade','Биржи / трейд',10),
-  ('chart','Графики',20),
-  ('earn','Заработок',30),
-  ('tools','Инструменты',40),
-  ('news','Новости',50),
-  ('social','Соцсети',60),
-  ('review','Обзоры',70),
-  ('team','Команда',80),
-  ('tokenomics','Токеномика',90),
-  ('aggregator','Агрегаторы',100)
+  ('trade','Trade',4),
+  ('chart','Charts',2),
+  ('earn','Earn',9),
+  ('tools','Tools',8),
+  ('news','News',3),
+  ('social','Social',7),
+  ('review','Review',5),
+  ('team','Team',6),
+  ('tokenomics','Tokenomics',10),
+  ('aggregator','Aggregators',1)
 on conflict (key) do nothing;

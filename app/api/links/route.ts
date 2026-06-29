@@ -1,14 +1,23 @@
 // app/api/links/route.ts
 // Drawer data source. CoinGecko drives the table; this route joins curated
-// links from Supabase by coingecko_id on click (with hover-prefetch).
+// links from Supabase by coingecko_id on click (with hover-prefetch). If a
+// coin has no curated links yet, it returns virtual links generated from
+// link_templates + cached provider metadata.
 //
 //   GET /api/links?cg=<coingeckoId>
-//   -> { asset: { id, name, ticker, icon, tv_symbol } | null, links: Link[] }
+//   -> { asset, links, categories, generated, status }
 
 import { NextRequest } from "next/server"
 import { kvGet, kvSetEx } from "@/lib/kv"
 import { supabaseServer } from "@/lib/supabase/server"
 import type { Asset, Link } from "@/types/asset"
+import { getLinkCacheKey } from "@/lib/links/cache-key"
+import { ensureAssetMeta } from "@/lib/asset-meta/ensure"
+import { getMarketRowFromCache } from "@/lib/asset-meta/markets-allowlist"
+import { maybeBackfillAssetFromMarket } from "@/lib/links/backfill-asset"
+import { buildAssetVars } from "@/lib/links/build-asset-vars"
+import { getActiveTemplates } from "@/lib/links/templates-cache"
+import { composeLinksPayload } from "@/lib/links/compose"
 
 interface CategoryMeta {
   key: string
@@ -18,80 +27,140 @@ interface CategoryMeta {
   asset_id: string | null
 }
 
+type AssetRow = Asset & {
+  status?: "described" | "template" | null
+  category_orders?: Record<string, number> | null
+}
+
+type LinksPayload = {
+  asset: Asset | null
+  links: Link[]
+  categories: CategoryMeta[]
+  generated: boolean
+  status: "described" | "template" | "undescribed"
+}
+
 const TTL = Number(process.env.LINKS_TTL_SECONDS ?? 60)
 
 export async function GET(req: NextRequest) {
   const cg = (req.nextUrl.searchParams.get("cg") ?? "").trim()
-  if (!cg) return json({ asset: null, links: [], categories: [] })
+  if (!cg) return json(emptyPayload())
 
-  // Compose the cache key with the categories-table version, so a bump of
-  // the version (via /api/admin/invalidate-link-caches) atomically retires
-  // every previously-cached payload after a category metadata change.
-  const version = await kvGet<number>("links:cache_version")
-  const v = typeof version === "number" ? version : 0
-  const cacheKey = `links:v${v}:${cg}`
-  const cached = await kvGet<{ asset: Asset | null; links: Link[]; categories: CategoryMeta[] }>(cacheKey)
+  const cacheKey = await getLinkCacheKey(cg)
+  const cached = await kvGet<LinksPayload>(cacheKey)
   if (cached) return json(cached)
 
   const supabase = await supabaseServer()
+  const marketRow = await getMarketRowFromCache(cg)
 
   // Asset first: we need its id to scope the categories query
   // (global categories ∪ categories scoped to this asset only).
-  const { data: asset, error: assetErr } = await supabase
+  const { data: assetRaw, error: assetErr } = await supabase
     .from("assets")
-    .select("id, name, ticker, icon, coingecko_id, tv_symbol, category_orders")
+    .select(
+      "id, name, ticker, icon, coingecko_id, tv_symbol, category_orders, status",
+    )
     .eq("coingecko_id", cg)
     .maybeSingle()
 
   if (assetErr) {
-    return json({ asset: null, links: [], categories: [] })
-  }
-  if (!asset) {
-    const empty = { asset: null, links: [] as Link[], categories: [] as CategoryMeta[] }
-    await kvSetEx(cacheKey, TTL, empty)
-    return json(empty)
+    return json(emptyPayload())
   }
 
-  // Categories: global (asset_id is null) ∪ scoped to this asset only.
-  // Dedupe by key — if a per-asset row exists for the same key as a global
-  // (shouldn't, because keys are globally unique, but defend anyway), the
-  // per-asset row wins so it can override label/icon for this coin.
-  const { data: rawCategories, error: catErr } = await supabase
+  const asset = (assetRaw ?? null) as AssetRow | null
+  const assetId = asset?.id ?? cg
+
+  // For missing/template assets, snapshot refresh is lazy and never blocks the
+  // response. Force/materialization waits explicitly in Aspect 6.
+  if (!asset || asset.status === "template") {
+    void ensureAssetMeta(cg).catch(() => {})
+  }
+
+  // Enrich minimal stubs without blocking render and without overwriting data.
+  maybeBackfillAssetFromMarket(asset, marketRow)
+
+  const categories = await loadCategories(supabase, assetId, !!asset)
+  const orderedCategories = applyCategoryOrder(
+    dedupeCategoriesByKey(categories),
+    asset?.category_orders ?? null,
+  )
+
+  const curated = asset
+    ? await loadCuratedLinks(supabase, asset.id)
+    : ([] as Link[])
+
+  const [{ data: meta }, templates] = await Promise.all([
+    asset
+      ? supabase
+          .from("asset_meta")
+          .select("data")
+          .eq("asset_id", asset.id)
+          .eq("provider", "coingecko")
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    getActiveTemplates(),
+  ])
+
+  const assetVars = buildAssetVars(cg, asset, marketRow)
+  const payload = composeLinksPayload<CategoryMeta>({
+    asset,
+    assetId,
+    curated,
+    categories: orderedCategories,
+    templates,
+    assetVars,
+    metaByProvider: meta?.data ? { coingecko: meta.data } : {},
+  })
+
+  await kvSetEx(cacheKey, TTL, payload)
+  return json(payload)
+}
+
+async function loadCategories(
+  supabase: Awaited<ReturnType<typeof supabaseServer>>,
+  assetId: string,
+  hasAsset: boolean,
+): Promise<CategoryMeta[]> {
+  const query = supabase
     .from("link_categories")
     .select("key, label, icon, sort, asset_id")
-    .or(`asset_id.is.null,asset_id.eq.${asset.id}`)
     .order("sort", { ascending: true })
 
-  if (catErr) {
-    return json({ asset: null, links: [], categories: [] })
-  }
+  const { data, error } = hasAsset
+    ? await query.or(`asset_id.is.null,asset_id.eq.${assetId}`)
+    : await query.is("asset_id", null)
 
-  const categories = dedupeCategoriesByKey((rawCategories ?? []) as CategoryMeta[])
+  if (error) return []
+  return (data ?? []) as CategoryMeta[]
+}
 
-  const { data: links, error: linksErr } = await supabase
+async function loadCuratedLinks(
+  supabase: Awaited<ReturnType<typeof supabaseServer>>,
+  assetId: string,
+): Promise<Link[]> {
+  const { data, error } = await supabase
     .from("links")
-    .select("id, asset_id, name, description, href, tier, category, health, is_top, manual_rank, ai_score")
-    .eq("asset_id", asset.id)
+    .select(
+      "id, asset_id, name, description, href, tier, category, health, is_top, manual_rank, ai_score, icon",
+    )
+    .eq("asset_id", assetId)
     .order("tier", { ascending: true })
     .order("is_top", { ascending: false, nullsFirst: false })
     .order("manual_rank", { ascending: true, nullsFirst: false })
     .order("ai_score", { ascending: false, nullsFirst: false })
 
-  if (linksErr) {
-    return json({ asset, links: [], categories })
-  }
+  if (error) return []
+  return (data ?? []) as Link[]
+}
 
-  const payload = {
-    asset,
-    links: (links ?? []) as Link[],
-    // Per-asset category sort override. `category_orders` is a jsonb map of
-    // { categoryKey: sortIndex }. Missing keys fall back to the row's sort.
-    // This is the unified ordering for global AND per-coin categories — so a
-    // per-coin category can sit between globals for this asset.
-    categories: applyCategoryOrder(categories, (asset as { category_orders?: Record<string, number> | null } | null)?.category_orders ?? null),
+function emptyPayload(): LinksPayload {
+  return {
+    asset: null,
+    links: [],
+    categories: [],
+    generated: false,
+    status: "undescribed",
   }
-  await kvSetEx(cacheKey, TTL, payload)
-  return json(payload)
 }
 
 function json(data: unknown, status = 200) {
@@ -132,13 +201,11 @@ function dedupeCategoriesByKey(rows: CategoryMeta[]): CategoryMeta[] {
       byKey.set(r.key, r)
       continue
     }
-    // Per-asset row wins.
     const prevScoped = prev.asset_id != null
     const nextScoped = r.asset_id != null
     if (!prevScoped && nextScoped) {
       byKey.set(r.key, r)
     }
-    // else: keep prev
   }
   return Array.from(byKey.values())
 }

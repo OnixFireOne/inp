@@ -77,6 +77,106 @@ export async function kvSetEx<T>(key: string, ttlSeconds: number, value: T): Pro
   }
 }
 
+// Atomically set `value` at `key` only if the key is currently unset, with
+// TTL `ttlSeconds`. Returns true if the write happened, false if the key
+// already existed. Used for single-flight locks.
+export async function kvSetNx<T>(
+  key: string,
+  ttlSeconds: number,
+  value: T,
+): Promise<boolean> {
+  cleanup()
+  const ttlMs = ttlSeconds * 1000
+  const now = Date.now()
+
+  // In-memory: best-effort atomic under the JS event loop (single-threaded).
+  const existing = memCache.get(key) as CacheEntry<T> | undefined
+  if (existing && existing.expiresAt > now) return false
+  memCache.set(key, { data: value, expiresAt: now + ttlMs })
+
+  // Upstash: real atomic SET ... NX EX. Conflict → undo the local write so
+  // the two stores don't disagree.
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+    try {
+      const res = await fetch(
+        `${process.env.KV_REST_API_URL}/set/${encodeURIComponent(
+          key,
+        )}?NX=1&EX=${Math.max(1, Math.floor(ttlSeconds))}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(value),
+          cache: "no-store",
+        },
+      )
+      // Upstash returns "OK" on success and null when NX rejects.
+      const raw = (await res.json()) as { result?: string | null }
+      if (raw.result == null) {
+        memCache.delete(key)
+        return false
+      }
+    } catch {
+      // Best-effort: if Upstash is unreachable we keep the local-only write
+      // and report success — locks stay useful for stampede protection
+      // even when KV is degraded.
+    }
+  }
+  return true
+}
+
+// Atomic increment with TTL. Used for fixed-window rate limits.
+// Upstash path is INCR + EXPIRE on the first hit; INCR is the global atomic
+// primitive we need across serverless instances.
+export async function kvIncrEx(
+  key: string,
+  ttlSeconds: number,
+): Promise<number | null> {
+  cleanup()
+
+  const now = Date.now()
+  const current = memCache.get(key) as CacheEntry<number> | undefined
+  const next = current && current.expiresAt > now ? Number(current.data) + 1 : 1
+  memCache.set(key, { data: next, expiresAt: now + ttlSeconds * 1000 })
+
+  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+    try {
+      const res = await fetch(
+        `${process.env.KV_REST_API_URL}/incr/${encodeURIComponent(key)}`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` },
+          cache: "no-store",
+        },
+      )
+      if (!res.ok) return null
+      const raw = (await res.json()) as { result?: number | string | null }
+      const n = Number(raw.result)
+      if (!Number.isFinite(n)) return null
+      if (n === 1) {
+        await fetch(
+          `${process.env.KV_REST_API_URL}/expire/${encodeURIComponent(
+            key,
+          )}/${Math.max(1, Math.floor(ttlSeconds))}`,
+          {
+            method: "POST",
+            headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` },
+            cache: "no-store",
+          },
+        )
+      }
+      memCache.set(key, { data: n, expiresAt: now + ttlSeconds * 1000 })
+      return n
+    } catch {
+      return null
+    }
+  }
+
+  return next
+}
+
 // Invalidate one key across both backends.
 // Server-side only — the in-memory map lives in the Node process and can't
 // be reached from the browser.

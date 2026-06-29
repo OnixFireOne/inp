@@ -10,6 +10,8 @@ export interface LinksPayload {
   asset: Pick<Asset, "id" | "name" | "ticker" | "icon" | "coingecko_id" | "tv_symbol"> | null
   links: Link[]
   categories: { key: string; label: string; icon: string | null; sort: number }[]
+  generated?: boolean
+  status?: "described" | "template" | "undescribed"
 }
 
 export const linksQueryKey = (coingeckoId: string) => ["links", coingeckoId] as const

@@ -80,6 +80,10 @@ export function LinkList({ links, categories, showUnknownBadge = false }: LinkLi
     return a.localeCompare(b)
   })
 
+  // Suppress the per-chip "generated" marker when every chip on this page is
+  // virtual — the header badge already conveys the state (TЗ §8.3).
+  const allGenerated = links.length > 0 && links.every((l) => l.generated === true)
+
   // Within a category, Core and Trusted each keep their incoming order
   // (DB already orders by is_top / manual_rank / ai_score). If you ever need
   // extra sort here, do it inside the per-key section below.
@@ -111,10 +115,11 @@ export function LinkList({ links, categories, showUnknownBadge = false }: LinkLi
                 <LinkIconBtn
                   key={link.id}
                   href={link.href}
-                  thumbnailUrl={link.thumbnailUrl}
+                  icon={link.icon}
                   name={link.name}
                   description={link.description}
                   size={link.tier === "Core" ? 28 : 20}
+                  generated={!allGenerated && link.generated === true}
                 />
               ))}
             </div>

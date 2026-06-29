@@ -7,6 +7,7 @@
 
 import type { Metadata } from "next"
 import { AssetOverview } from "@/components/AssetOverview"
+import { GeneratedBadge } from "@/components/GeneratedBadge"
 import { AssetTable } from "@/components/AssetTable"
 import type { MarketsResponse } from "@/lib/types"
 import type { Link } from "@/types/asset"
@@ -26,6 +27,8 @@ interface LinksPayload {
   asset: Pick<AssetRow, "id" | "name" | "ticker" | "icon" | "coingecko_id" | "tv_symbol"> | null
   links: Link[]
   categories: { key: string; label: string; icon: string | null; sort: number }[]
+  generated: boolean
+  status: "described" | "template" | "undescribed"
 }
 
 interface PageProps {
@@ -41,8 +44,8 @@ async function fetchAll(baseUrl: string, id: string) {
       .eq("coingecko_id", id)
       .maybeSingle<AssetRow>(),
     fetch(`${baseUrl}/api/links?cg=${encodeURIComponent(id)}`, { next: { revalidate: 60 } })
-      .then((r) => (r.ok ? r.json() : { asset: null, links: [], categories: [] }))
-      .catch(() => ({ asset: null, links: [], categories: [] })),
+      .then((r) => (r.ok ? r.json() : { asset: null, links: [], categories: [], generated: false, status: "undescribed" }))
+      .catch(() => ({ asset: null, links: [], categories: [], generated: false, status: "undescribed" })),
     fetch(`${baseUrl}/api/markets?ids=${encodeURIComponent(id)}`, { next: { revalidate: 45 } })
       .then((r) => (r.ok ? r.json() : { rows: [] }))
       .catch(() => ({ rows: [] })),
@@ -53,6 +56,8 @@ async function fetchAll(baseUrl: string, id: string) {
     describedAsset: linksRes.asset ?? null,
     links: linksRes.links ?? [],
     categories: linksRes.categories ?? [],
+    generated: linksRes.generated ?? false,
+    status: linksRes.status ?? "undescribed",
     marketRow: marketRes.rows?.[0] ?? null,
   }
 }
@@ -78,8 +83,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       .eq("coingecko_id", id)
       .maybeSingle<{ id: string; name: string; ticker: string; icon: string | null; coingecko_id: string }>(),
     fetch(`${internalBaseUrl}/api/links?cg=${encodeURIComponent(id)}`, { next: { revalidate: 60 } })
-      .then((r) => (r.ok ? (r.json() as Promise<LinksPayload>) : { asset: null, links: [], categories: [] }))
-      .catch(() => ({ asset: null, links: [], categories: [] })),
+      .then((r) => (r.ok ? (r.json() as Promise<LinksPayload>) : ({ asset: null, links: [], categories: [], generated: false, status: "undescribed" } as LinksPayload)))
+      .catch(() => ({ asset: null, links: [], categories: [], generated: false, status: "undescribed" } as LinksPayload)),
     fetch(`${internalBaseUrl}/api/markets?ids=${encodeURIComponent(id)}`, { next: { revalidate: 45 } })
       .then((r) => (r.ok ? (r.json() as Promise<{ rows: MarketRowMinimal[] }>) : { rows: [] }))
       .catch(() => ({ rows: [] })),
@@ -117,7 +122,7 @@ export default async function AssetPage({ params }: PageProps) {
   const { id } = await params
   const baseUrl = INTERNAL_BASE_URL
 
-  const [{ asset, describedAsset, links, categories, marketRow }, marketsHome] = await Promise.all([
+  const [{ asset, describedAsset, links, categories, generated, status, marketRow }, marketsHome] = await Promise.all([
     fetchAll(baseUrl, id),
     fetch(`${baseUrl}/api/markets?page=1`, { next: { revalidate: 30 } })
       .then((r) => (r.ok ? (r.json() as Promise<MarketsResponse>) : null))
@@ -159,9 +164,12 @@ export default async function AssetPage({ params }: PageProps) {
               <div className="w-14 h-14 rounded-full bg-[var(--surface-2)]" />
             )}
             <div className="min-w-0">
-              <h1 className="text-2xl font-semibold truncate">
-                {asset?.name ?? market?.name ?? id}
-              </h1>
+              <div className="flex items-center gap-2 min-w-0">
+                <h1 className="text-2xl font-semibold truncate">
+                  {asset?.name ?? market?.name ?? id}
+                </h1>
+                <GeneratedBadge generated={generated} status={status} />
+              </div>
               <div className="text-sm text-[var(--text-mut)] uppercase">
                 {asset?.ticker ?? market?.symbol ?? ""}
               </div>
@@ -183,6 +191,8 @@ export default async function AssetPage({ params }: PageProps) {
             asset={describedAsset ?? asset}
             links={links}
             categories={categories}
+            generated={generated}
+            status={status}
             market={market}
             variant="page"
           />

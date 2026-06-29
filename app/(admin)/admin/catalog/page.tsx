@@ -15,10 +15,12 @@ type Described = {
   name: string
   ticker: string
   icon: string | null
+  status?: "described" | "template" | null
 }
 
 export default function CatalogPage() {
   const [selected, setSelected] = useState<{ row: MarketRow; described: Described | undefined } | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   return (
     <main className="min-h-screen pb-16">
@@ -30,11 +32,17 @@ export default function CatalogPage() {
               Живой маркет CoinGecko. Описана = есть строка в <code>assets</code> + её ссылки.
             </p>
           </div>
-          <Link href="/admin/link-categories" className="text-sm text-[var(--text-mut)] hover:text-[var(--text)] border rounded px-2.5 py-1.5 shrink-0">
-            Категории
-          </Link>
+          <div className="flex gap-2">
+            <Link href="/admin/link-templates" className="text-sm text-[var(--text-mut)] hover:text-[var(--text)] border rounded px-2.5 py-1.5 shrink-0">
+              Шаблоны
+            </Link>
+            <Link href="/admin/link-categories" className="text-sm text-[var(--text-mut)] hover:text-[var(--text)] border rounded px-2.5 py-1.5 shrink-0">
+              Категории
+            </Link>
+          </div>
         </header>
         <CatalogTable
+          key={refreshKey}
           onSelect={(row: MarketRow, described: Described | undefined) => {
             setSelected({ row, described })
           }}
@@ -46,6 +54,10 @@ export default function CatalogPage() {
           row={selected.row}
           described={selected.described}
           onClose={() => setSelected(null)}
+          onMaterialized={() => {
+            setSelected(null)
+            setRefreshKey((v) => v + 1)
+          }}
         />
       )}
     </main>

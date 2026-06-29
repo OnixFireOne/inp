@@ -10,7 +10,7 @@ import { useList } from "@refinedev/core"
 import { StatusBadge } from "./StatusBadge"
 import type { MarketRow } from "@/lib/types"
 
-type Filter = "all" | "described" | "missing"
+type Filter = "all" | "described" | "template" | "missing"
 
 type Described = {
   coingecko_id: string
@@ -18,6 +18,7 @@ type Described = {
   name: string
   ticker: string
   icon: string | null
+  status?: "described" | "template" | null
   links: { count: number }[]
 }
 
@@ -62,6 +63,7 @@ export function CatalogTable({
   const assets = useList<Described>({
     resource: "assets",
     pagination: { currentPage: 1, pageSize: 1000, mode: "server" },
+    meta: { select: "id, coingecko_id, name, ticker, icon, status, links(count)" },
   })
 
   const describedMap = useMemo(() => {
@@ -83,7 +85,9 @@ export function CatalogTable({
         return false
       }
       const d = describedMap.get(r.id)
-      if (filter === "described" && !d) return false
+      const status = d?.status ?? (d ? "described" : undefined)
+      if (filter === "described" && status !== "described") return false
+      if (filter === "template" && status !== "template") return false
       if (filter === "missing" && d) return false
       return true
     })
@@ -109,7 +113,10 @@ export function CatalogTable({
           Все <span className="text-[var(--text-mut)]">({accumulated.length + 1})</span>
         </FilterBtn>
         <FilterBtn value="described" current={filter} onChange={setFilter}>
-          Описанные <span className="text-[var(--text-mut)]">({describedMap.size})</span>
+          Описанные <span className="text-[var(--text-mut)]">({Array.from(describedMap.values()).filter((d) => (d.status ?? "described") === "described").length})</span>
+        </FilterBtn>
+        <FilterBtn value="template" current={filter} onChange={setFilter}>
+          Шаблон <span className="text-[var(--text-mut)]">({Array.from(describedMap.values()).filter((d) => d.status === "template").length})</span>
         </FilterBtn>
         <FilterBtn value="missing" current={filter} onChange={setFilter}>
           Не описанные

@@ -9,6 +9,7 @@
 import { NextRequest } from "next/server"
 import { kvDel, kvGet } from "@/lib/kv"
 import { supabaseServer } from "@/lib/supabase/server"
+import { bustLinkCaches } from "@/lib/asset-meta/bust-link-cache"
 
 async function assertAdmin(): Promise<boolean> {
   const supabase = await supabaseServer()
@@ -54,6 +55,9 @@ export async function POST(req: NextRequest) {
   const v = typeof version === "number" ? version : 0
   await Promise.all(
     Array.from(ids).flatMap((cg) => [
+      bustLinkCaches(cg),
+      // Legacy keys kept for compatibility with payloads written before
+      // Aspect 5 introduced links:v{v}:t{tv}:{cg}.
       kvDel(`links:${cg}`),
       kvDel(`links:v${v}:${cg}`),
     ]),
