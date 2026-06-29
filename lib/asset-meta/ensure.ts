@@ -9,6 +9,7 @@ import { kvDel, kvGet, kvSetEx, kvSetNx } from "../kv"
 import { supabaseServer } from "../supabase/server"
 import { COINGECKO_BASE, fetchCoinMeta } from "./coingecko"
 import { isAllowedCgId } from "./markets-allowlist"
+import { warmMarketRow } from "./markets-warm"
 import { bustLinkCaches } from "./bust-link-cache"
 import { ensureAssetStub } from "./stub"
 import { tryConsume } from "./rate-limit"
@@ -47,12 +48,13 @@ export type EnsureResult =
 /**
  * Ensure `asset_meta(asset_id=cg, provider='coingecko')` is fresh.
  *
- * Guard order (cheap first):
- *   1. negative-cache    (id was 404 from CG recently — unless force)
- *   2. allowlist         (id must appear in /api/markets cache — never skips)
+ * Guard order:
+ *   1. negative-cache    (id was 404 from CG/markets recently — unless force)
+ *   2. fast allowlist    (warmed caches only; no network)
  *   3. freshness         (DB row younger than TTL — unless force)
  *   4. single-flight lock
- *   5. rate budget
+ *   5. rate budget       (bounds both market warm and snapshot fetch)
+ *   5b. cold market warm (single /coins/markets?ids=... under lock+budget)
  *   6. fetch + trim + ensureAssetStub + upsert
  *   7. release lock + bust storefront cache
  */
@@ -73,6 +75,7 @@ export function ensureAssetMeta(
 
 async function doEnsure(cg: string, force: boolean): Promise<EnsureResult> {
   if (!cg) return { status: "skipped" }
+  let warmedMarketRow: Awaited<ReturnType<typeof warmMarketRow>> = null
 
   // 1. Negative cache.
   if (!force) {
@@ -80,9 +83,9 @@ async function doEnsure(cg: string, force: boolean): Promise<EnsureResult> {
     if (neg) return { status: "negative_cached" }
   }
 
-  // 2. Allowlist (cheap, in-process memo + KV read of existing /markets cache).
-  const allowed = await isAllowedCgId(cg)
-  if (!allowed) return { status: "forbidden" }
+  // 2. Fast allowlist (cheap, warmed caches only; no network). If cold, we
+  // decide later under the single-flight lock + rate budget.
+  const allowedFast = await isAllowedCgId(cg)
 
   const supabase = await supabaseServer()
 
@@ -105,6 +108,19 @@ async function doEnsure(cg: string, force: boolean): Promise<EnsureResult> {
     })
     if (!ok) return { status: "rate_limited" }
 
+    // 5b. Cold deep-link: not in any warmed markets page/id cache. Warm one
+    // market row under the same lock+budget that protects the snapshot fetch.
+    // Real coin → allowlist opens and ticker becomes available for {symbol};
+    // nonsense id → negative-cache so repeat bot hits are cheap.
+    if (!allowedFast) {
+      const warmed = await warmMarketRow(cg)
+      if (!warmed) {
+        await kvSetEx(negKey(cg), NEG_TTL, "1")
+        return { status: "forbidden" }
+      }
+      warmedMarketRow = warmed
+    }
+
     // 6. Fetch.
     const result = await fetchCoinMeta(cg)
     if (!result.ok) {
@@ -116,7 +132,7 @@ async function doEnsure(cg: string, force: boolean): Promise<EnsureResult> {
     }
 
     // FK pre-condition (item #2 in review): asset_meta.asset_id → assets(id).
-    await ensureAssetStub(cg)
+    await ensureAssetStub(cg, warmedMarketRow)
 
     const { error } = await supabase
       .from("asset_meta")

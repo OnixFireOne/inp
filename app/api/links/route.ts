@@ -41,6 +41,12 @@ type LinksPayload = {
 }
 
 const TTL = Number(process.env.LINKS_TTL_SECONDS ?? 60)
+const ENSURE_INLINE_TIMEOUT_MS = Number(
+  process.env.ENSURE_INLINE_TIMEOUT_MS ?? 5000,
+)
+
+const ASSET_SELECT =
+  "id, name, ticker, icon, coingecko_id, tv_symbol, category_orders, status"
 
 export async function GET(req: NextRequest) {
   const cg = (req.nextUrl.searchParams.get("cg") ?? "").trim()
@@ -51,33 +57,32 @@ export async function GET(req: NextRequest) {
   if (cached) return json(cached)
 
   const supabase = await supabaseServer()
+  // Asset first: we need its id to load curated links and scoped categories.
+  let asset = await loadAsset(supabase, cg)
+
+  let curated = asset ? await loadCuratedLinks(supabase, asset.id) : ([] as Link[])
+
+  // Cold/template coin without curated links: do the snapshot warm inline so
+  // the first response can include provider links and {symbol} patterns.
+  // Described/curated coins never wait here.
+  const needsSnapshot =
+    (!asset || asset.status === "template") && (curated?.length ?? 0) === 0
+  if (needsSnapshot) {
+    await ensureAssetMetaInline(cg, ENSURE_INLINE_TIMEOUT_MS)
+    // Re-read: ensureAssetMeta may have created the stub, warmed markets:ids,
+    // and inserted asset_meta.
+    asset = await loadAsset(supabase, cg)
+    curated = asset ? await loadCuratedLinks(supabase, asset.id) : ([] as Link[])
+  }
+
+  // Read the warmed market row only after inline ensure. This supplies ticker
+  // for {symbol} templates on cold deep links.
   const marketRow = await getMarketRowFromCache(cg)
-
-  // Asset first: we need its id to scope the categories query
-  // (global categories ∪ categories scoped to this asset only).
-  const { data: assetRaw, error: assetErr } = await supabase
-    .from("assets")
-    .select(
-      "id, name, ticker, icon, coingecko_id, tv_symbol, category_orders, status",
-    )
-    .eq("coingecko_id", cg)
-    .maybeSingle()
-
-  if (assetErr) {
-    return json(emptyPayload())
-  }
-
-  const asset = (assetRaw ?? null) as AssetRow | null
-  const assetId = asset?.id ?? cg
-
-  // For missing/template assets, snapshot refresh is lazy and never blocks the
-  // response. Force/materialization waits explicitly in Aspect 6.
-  if (!asset || asset.status === "template") {
-    void ensureAssetMeta(cg).catch(() => {})
-  }
 
   // Enrich minimal stubs without blocking render and without overwriting data.
   maybeBackfillAssetFromMarket(asset, marketRow)
+
+  const assetId = asset?.id ?? cg
 
   const categories = await loadCategories(supabase, assetId, !!asset)
   const orderedCategories = applyCategoryOrder(
@@ -85,19 +90,13 @@ export async function GET(req: NextRequest) {
     asset?.category_orders ?? null,
   )
 
-  const curated = asset
-    ? await loadCuratedLinks(supabase, asset.id)
-    : ([] as Link[])
-
   const [{ data: meta }, templates] = await Promise.all([
-    asset
-      ? supabase
-          .from("asset_meta")
-          .select("data")
-          .eq("asset_id", asset.id)
-          .eq("provider", "coingecko")
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
+    supabase
+      .from("asset_meta")
+      .select("data")
+      .eq("asset_id", asset?.id ?? cg)
+      .eq("provider", "coingecko")
+      .maybeSingle(),
     getActiveTemplates(),
   ])
 
@@ -132,6 +131,34 @@ async function loadCategories(
 
   if (error) return []
   return (data ?? []) as CategoryMeta[]
+}
+
+async function loadAsset(
+  supabase: Awaited<ReturnType<typeof supabaseServer>>,
+  cg: string,
+): Promise<AssetRow | null> {
+  const { data, error } = await supabase
+    .from("assets")
+    .select(ASSET_SELECT)
+    .eq("coingecko_id", cg)
+    .maybeSingle()
+  if (error) return null
+  return (data ?? null) as AssetRow | null
+}
+
+async function ensureAssetMetaInline(cg: string, ms: number): Promise<void> {
+  try {
+    await Promise.race([
+      ensureAssetMeta(cg, { wait: true }),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("ensure-inline-timeout")), ms)
+      }),
+    ])
+  } catch {
+    // Timeout/error must not block the storefront. The in-flight ensure keeps
+    // running and will bust the per-coin links cache after a successful upsert,
+    // so a subsequent request can pick up the snapshot.
+  }
 }
 
 async function loadCuratedLinks(
