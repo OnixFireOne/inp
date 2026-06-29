@@ -308,6 +308,12 @@ pre {
   color: var(--text);
 }
 
+/* Generated (auto/template) marker — dotted border (TЗ §8.3). */
+.link-icon-btn--generated {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
 /* Radix Tooltip content (rendered via Portal → escape overflow) */
 .link-tooltip {
   background: var(--surface);

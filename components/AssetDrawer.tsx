@@ -10,7 +10,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useSyncExternalStore } from "react"
 import type { Asset, Link } from "@/types/asset"
 import { AssetOverview } from "./AssetOverview"
-import { linksQueryKey } from "@/lib/prefetch"
+import { linksQueryKey, type LinksPayload } from "@/lib/prefetch"
 
 function useIsDesktop() {
   return useSyncExternalStore(
@@ -32,15 +32,11 @@ interface AssetDrawerProps {
   market?: { name: string; symbol: string; image: string; price: number | null; change24h: number; marketCap: number | null }
 }
 
-interface LinksPayload {
-  asset: Pick<Asset, "id" | "name" | "ticker" | "icon" | "coingecko_id" | "tv_symbol"> | null
-  links: Link[]
-  categories: { key: string; label: string; icon: string | null; sort: number }[]
-}
-
 async function fetchLinks(cg: string, signal: AbortSignal): Promise<LinksPayload> {
   const r = await fetch(`/api/links?cg=${encodeURIComponent(cg)}`, { signal })
-  if (!r.ok) return { asset: null, links: [], categories: [] }
+  if (!r.ok) {
+    return { asset: null, links: [], categories: [], generated: false, status: "undescribed" }
+  }
   return (await r.json()) as LinksPayload
 }
 
@@ -54,7 +50,7 @@ export function AssetDrawer({ open, onOpenChange, coingeckoId, market }: AssetDr
 
 function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerProps) {
   const enabled = open && !!coingeckoId
-  const { data, isLoading } = useQuery({
+  const { data, isLoading } = useQuery<LinksPayload>({
     queryKey: coingeckoId ? linksQueryKey(coingeckoId) : ["links", "_disabled"],
     queryFn: ({ signal }) => fetchLinks(coingeckoId as string, signal),
     enabled,
@@ -77,6 +73,8 @@ function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerPr
             asset={data?.asset ?? null}
             links={data?.links ?? []}
             categories={data?.categories}
+            generated={data?.generated}
+            status={data?.status}
             market={market}
             isLoading={isLoading}
             variant="drawer"
@@ -91,7 +89,7 @@ function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerPr
 // Desktop: Radix side-panel
 function DesktopDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerProps) {
   const enabled = open && !!coingeckoId
-  const { data, isLoading } = useQuery({
+  const { data, isLoading } = useQuery<LinksPayload>({
     queryKey: coingeckoId ? linksQueryKey(coingeckoId) : ["links", "_disabled"],
     queryFn: ({ signal }) => fetchLinks(coingeckoId as string, signal),
     enabled,
@@ -116,6 +114,8 @@ function DesktopDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerP
               asset={data?.asset ?? null}
               links={data?.links ?? []}
               categories={data?.categories}
+              generated={data?.generated}
+              status={data?.status}
               market={market}
               isLoading={isLoading}
               variant="drawer"

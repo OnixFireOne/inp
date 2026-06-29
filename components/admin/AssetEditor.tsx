@@ -10,7 +10,7 @@
 //   - register / handleSubmit / formState (RHF)
 //   - refineCore.onFinish / queryResult / formLoading / redirect
 // We don't use `redirect` from useForm — the parent page handles navigation.
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "@refinedev/react-hook-form"
 import { useOne, type HttpError } from "@refinedev/core"
 import { useQueryClient } from "@tanstack/react-query"
@@ -25,6 +25,7 @@ type Described = {
   name: string
   ticker: string
   icon: string | null
+  status?: "described" | "template" | null
 }
 
 type AssetFormValues = {
@@ -40,10 +41,12 @@ export function AssetEditor({
   market,
   existing,
   onClose,
+  onMaterialized,
 }: {
   market: MarketRow
   existing: Described | undefined
   onClose: () => void
+  onMaterialized?: () => void
 }) {
   const isEdit = !!existing
   const targetId = existing?.id ?? market.id
@@ -51,6 +54,8 @@ export function AssetEditor({
   // invalidation. For the synthetic "all" row this is just "all".
   const coingeckoId = existing?.coingecko_id ?? market.id
   const queryClient = useQueryClient()
+  const [materializing, setMaterializing] = useState(false)
+  const [materializeMsg, setMaterializeMsg] = useState<string | null>(null)
 
   // tv_symbol is not in the editor's `existing` subset — pull it via useOne
   // only when editing so we don't clobber it.
@@ -118,6 +123,40 @@ export function AssetEditor({
     queryClient.invalidateQueries({ queryKey: linksQueryKey(previousCg) })
   }
 
+  async function handleMaterialize() {
+    setMaterializing(true)
+    setMaterializeMsg(null)
+    try {
+      const response = await adminFetch("/api/admin/materialize-links", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cg: coingeckoId }),
+      })
+      const res = (await response.json().catch(() => ({}))) as {
+        ok?: boolean
+        inserted?: number
+        snapshot?: boolean
+        error?: string
+      }
+      if (!response.ok || !res.ok) {
+        setMaterializeMsg(res.error ?? "Не удалось материализовать")
+        return
+      }
+      queryClient.invalidateQueries({ queryKey: linksQueryKey(coingeckoId) })
+      queryClient.invalidateQueries({ queryKey: ["assets"] })
+      setMaterializeMsg(
+        `Материализовано: +${res.inserted ?? 0}${res.snapshot === false ? " · снимок недоступен" : ""}`,
+      )
+      onMaterialized?.()
+    } catch (e) {
+      setMaterializeMsg(e instanceof Error ? e.message : "Не удалось материализовать")
+    } finally {
+      setMaterializing(false)
+    }
+  }
+
+  const canMaterialize = !existing || existing.status === "template"
+
   return (
     <form onSubmit={handleSubmit(handleFinish)} className="space-y-6">
       <section className="space-y-3">
@@ -169,7 +208,7 @@ export function AssetEditor({
             {String((query.error as unknown as Error).message ?? query.error)}
           </div>
         )}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="submit"
             disabled={formLoading}
@@ -177,10 +216,23 @@ export function AssetEditor({
           >
             {formLoading ? "Сохранение…" : isEdit ? "Сохранить" : "Создать"}
           </button>
+          {canMaterialize && (
+            <button
+              type="button"
+              onClick={handleMaterialize}
+              disabled={materializing}
+              className="px-3 py-1.5 rounded border text-sm disabled:opacity-50"
+            >
+              {materializing ? "Материализация…" : "Материализовать"}
+            </button>
+          )}
           <button type="button" onClick={onClose} className="px-3 py-1.5 rounded border text-sm">
             Закрыть
           </button>
         </div>
+        {materializeMsg && (
+          <div className="text-sm text-[var(--text-mut)]">{materializeMsg}</div>
+        )}
       </section>
 
       {isEdit && (

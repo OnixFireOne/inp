@@ -12,13 +12,14 @@ import { LinkIcon } from "./LinkIcon"
 
 interface LinkIconBtnProps {
   href: string
-  thumbnailUrl?: string | null
+  icon?: string | null
   name: string
-  description?: string
+  description?: string | null
   size: number
+  generated?: boolean
 }
 
-export function LinkIconBtn({ href, thumbnailUrl, name, description, size }: LinkIconBtnProps) {
+export function LinkIconBtn({ href, icon, name, description, size, generated }: LinkIconBtnProps) {
   return (
     <Tooltip.Root delayDuration={150} disableHoverableContent={false}>
       <Tooltip.Trigger asChild>
@@ -26,10 +27,10 @@ export function LinkIconBtn({ href, thumbnailUrl, name, description, size }: Lin
           href={href}
           target="_blank"
           rel="noreferrer noopener"
-          className="link-icon-btn"
+          className={`link-icon-btn${generated ? " link-icon-btn--generated" : ""}`}
           aria-label={description ? `${name} — ${description}` : name}
         >
-          <LinkIcon href={href} thumbnailUrl={thumbnailUrl} name={name} size={size} />
+          <LinkIcon href={href} icon={icon} name={name} size={size} />
         </a>
       </Tooltip.Trigger>
       <Tooltip.Portal>

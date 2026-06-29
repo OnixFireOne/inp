@@ -13,15 +13,17 @@ type Described = {
   name: string
   ticker: string
   icon: string | null
+  status?: "described" | "template" | null
 }
 
 interface CoinEditorModalProps {
   row: MarketRow
   described: Described | undefined
   onClose: () => void
+  onMaterialized?: () => void
 }
 
-export function CoinEditorModal({ row, described, onClose }: CoinEditorModalProps) {
+export function CoinEditorModal({ row, described, onClose, onMaterialized }: CoinEditorModalProps) {
   return (
     <Dialog.Root open onOpenChange={(o) => { if (!o) onClose() }}>
       <Dialog.Portal>
@@ -43,7 +45,7 @@ export function CoinEditorModal({ row, described, onClose }: CoinEditorModalProp
               </svg>
             </Dialog.Close>
           </div>
-          <AssetEditor market={row} existing={described} onClose={onClose} />
+          <AssetEditor market={row} existing={described} onClose={onClose} onMaterialized={onMaterialized} />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

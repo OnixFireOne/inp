@@ -9,6 +9,7 @@
 // variant="drawer". In "page" mode the parent page supplies its own header.
 
 import { LinkList } from "./LinkList"
+import { GeneratedBadge } from "./GeneratedBadge"
 import type { Link } from "@/types/asset"
 
 export interface AssetOverviewMarket {
@@ -27,6 +28,7 @@ export interface AssetOverviewAsset {
   icon?: string | null
   coingecko_id?: string | null
   tv_symbol?: string | null
+  status?: "described" | "template" | "undescribed" | null
 }
 
 export interface CategoryMeta {
@@ -41,6 +43,8 @@ interface AssetOverviewProps {
   links: Link[]
   market?: AssetOverviewMarket
   categories?: CategoryMeta[]
+  generated?: boolean
+  status?: "described" | "template" | "undescribed"
   isLoading?: boolean
   variant: "drawer" | "page"
   onClose?: () => void
@@ -51,6 +55,8 @@ export function AssetOverview({
   links,
   market,
   categories,
+  generated,
+  status,
   isLoading = false,
   variant,
   onClose,
@@ -85,7 +91,10 @@ export function AssetOverview({
               <div className="w-11 h-11 rounded-full bg-[var(--surface-2)]" />
             )}
             <div className="min-w-0">
-              <div className="font-semibold truncate">{displayName || "—"}</div>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-semibold truncate">{displayName || "—"}</span>
+                <GeneratedBadge generated={generated} status={status ?? asset?.status ?? undefined} />
+              </div>
               <div className="text-xs text-[var(--text-mut)] uppercase">{displaySymbol}</div>
             </div>
           </div>
