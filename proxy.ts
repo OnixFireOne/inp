@@ -53,6 +53,41 @@ function isApiRoute(pathname: string): boolean {
   return pathname.startsWith("/api/admin/")
 }
 
+function isTransientAuthError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false
+  const e = err as { name?: string; status?: number; message?: string; code?: string }
+  if (e.name === "AuthRetryableFetchError") return true
+  if (e.status === 0 || e.status === 429 || (typeof e.status === "number" && e.status >= 500)) return true
+  if (e.code === "UND_ERR_CONNECT_TIMEOUT") return true
+  const msg = (e.message ?? "").toLowerCase()
+  return msg.includes("fetch failed") || msg.includes("timeout") || msg.includes("und_err")
+}
+
+async function getUserWithRetry(sb: ReturnType<typeof createServerClient>, tries = 3) {
+  let last!: Awaited<ReturnType<typeof sb.auth.getUser>>
+  for (let i = 0; i < tries; i++) {
+    last = await sb.auth.getUser()
+    if (!last.error || !isTransientAuthError(last.error)) return last
+    await new Promise((r) => setTimeout(r, 150 * (i + 1)))
+  }
+  return last
+}
+
+// Сетевой сбой апстрима ≠ «нет прав». Не редиректим на signin (это и есть «логаут»),
+// отдаём 503, чтобы сессия осталась и клиент мог повторить.
+function transientFailure(req: NextRequest): NextResponse {
+  if (isApiRoute(req.nextUrl.pathname)) {
+    return NextResponse.json(
+      { ok: false, error: "auth_upstream_unreachable" },
+      { status: 503, headers: { "retry-after": "2" } },
+    )
+  }
+  return new NextResponse(
+    "Сервис авторизации временно недоступен. Обновите страницу.",
+    { status: 503, headers: { "content-type": "text/html; charset=utf-8", "retry-after": "2" } },
+  )
+}
+
 export async function proxy(req: NextRequest) {
   // Pre-build the response we'll attach rotated cookies to. Forward the
   // incoming request headers so RSC downstream sees the same context.
@@ -86,8 +121,9 @@ export async function proxy(req: NextRequest) {
   const {
     data: { user },
     error: userErr,
-  } = await sb.auth.getUser()
+  } = await getUserWithRetry(sb)
 
+  if (userErr && isTransientAuthError(userErr)) return transientFailure(req)
   if (userErr || !user) {
     return deny(req, "unauthenticated", 401)
   }
@@ -99,6 +135,7 @@ export async function proxy(req: NextRequest) {
     .eq("user_id", user.id)
     .single()
 
+  if (profileErr && isTransientAuthError(profileErr)) return transientFailure(req)
   if (profileErr || !profile || profile.role !== "admin") {
     // Logged in but not an admin.
     return deny(req, "forbidden", 403)

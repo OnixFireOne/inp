@@ -22,19 +22,22 @@ export default async function AdminLayout({
   const sb = await supabaseServer()
   const {
     data: { user },
+    error: userErr,
   } = await sb.auth.getUser()
 
+  if (userErr) throw userErr
   if (!user) {
     redirect("/auth/signin?next=/admin")
   }
 
   // Role lives in DB, not JWT — single index-lookup.
-  const { data: profile } = await sb
+  const { data: profile, error: profileErr } = await sb
     .from("profiles")
     .select("role")
     .eq("user_id", user.id)
     .single()
 
+  if (profileErr) throw profileErr
   if (!profile || profile.role !== "admin") {
     redirect("/")
   }

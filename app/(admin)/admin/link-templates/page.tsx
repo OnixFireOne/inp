@@ -442,6 +442,12 @@ function TemplateRow({
       : row.provider && row.source_key
         ? `${row.provider}:${row.source_key}`
         : "—"
+  const iconHref =
+    row.kind === "pattern"
+      ? row.url_pattern ?? ""
+      : row.provider && row.source_key
+        ? resolveSource(row.provider, row.source_key, SAMPLE_CG_META) ?? ""
+        : ""
   return (
     <li ref={setNodeRef} style={style} className="flex items-center gap-3 px-3 py-2 text-sm bg-[var(--surface)]">
       <button
@@ -456,7 +462,14 @@ function TemplateRow({
           <circle cx="15" cy="6" r="1" /><circle cx="15" cy="12" r="1" /><circle cx="15" cy="18" r="1" />
         </svg>
       </button>
-      <span className="w-6 text-center">{row.icon || ""}</span>
+      <span className="w-6 flex justify-center">
+        <LinkIcon
+          href={iconHref}
+          icon={row.icon}
+          name={row.label || row.source_key || "—"}
+          size={20}
+        />
+      </span>
       <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border">{row.kind}</span>
       <span className="flex-1 min-w-0">
         <span className="font-medium">{row.label || "(без названия)"}</span>

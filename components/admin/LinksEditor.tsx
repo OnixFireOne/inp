@@ -33,6 +33,7 @@ import { CSS } from "@dnd-kit/utilities"
 import { useList, useCreate, useUpdate, useDelete, type CrudFilter } from "@refinedev/core"
 import { useQueryClient } from "@tanstack/react-query"
 import { linksQueryKey } from "@/lib/prefetch"
+import { LinkIcon } from "@/components/LinkIcon"
 import { faviconUrl } from "@/lib/admin/favicon"
 import { adminFetch, AdminForbiddenError } from "@/lib/admin/fetch"
 
@@ -321,7 +322,7 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
           <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/50" />
           <Dialog.Content
             aria-describedby={undefined}
-            className="fixed left-1/2 top-1/2 z-[61] -translate-x-1/2 -translate-y-1/2 w-[min(560px,94vw)] max-h-[88vh] overflow-y-auto rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-2xl p-5 drawer-scroll"
+            className="fixed left-1/2 top-1/2 z-[61] -translate-x-1/2 -translate-y-1/2 w-[min(560px,94vw)] max-h-[88vh] overflow-y-auto rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-2xl p-5"
           >
             {editing && (
               <>
@@ -367,6 +368,24 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
                       <span className="text-sm">в топе</span>
                     </label>
                   </Field>
+                </div>
+                {/* live preview — как в редакторе шаблонов */}
+                <div className="mt-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-[var(--text-mut)] mb-2">
+                    Превью
+                  </div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <LinkIcon
+                      href={editing.href || ""}
+                      icon={editing.icon}
+                      name={editing.name || "preview"}
+                      size={22}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-sm truncate">{editing.name || "(без названия)"}</div>
+                      <div className="text-xs text-[var(--text-mut)] truncate">{editing.href || "—"}</div>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex gap-2 pt-3">
                   <button onClick={submit} className="px-3 py-1.5 rounded border bg-foreground text-background text-sm cursor-pointer">Сохранить</button>
