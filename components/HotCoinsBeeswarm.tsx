@@ -1467,6 +1467,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         }}
       >
         <canvas
+          id="hot-coins-chart"
           ref={canvasRef}
           className="absolute inset-0 w-full h-full z-[2] block cursor-grab"
         />
