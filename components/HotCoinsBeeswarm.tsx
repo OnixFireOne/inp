@@ -74,6 +74,8 @@ interface Coin {
   marketCap: number
   pct: number
   stable: boolean
+  /** CoinGecko market_cap_rank — null when unavailable. */
+  rank: number | null
 }
 
 interface Node {
@@ -246,6 +248,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         marketCap: r.marketCap,
         pct: r.change24h,
         stable: !!r.stable,
+        rank: typeof r.rank === "number" && r.rank > 0 ? r.rank : null,
       })
     }
     return out
@@ -1145,7 +1148,8 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     function showTip(e: MouseEvent, node: Node) {
       const c = node.c
       const pos = c.pct >= 0
-      tipEl!.innerHTML = `<b>${escapeHtml(c.symbol)}</b> ${escapeHtml(c.name)}<br><span style="color:${pos ? "#16c784" : "#ea3943"}">${fmtPct(c.pct)}</span> · ${fmtCap(c.marketCap)}`
+      const rankLabel = c.rank != null ? `#${c.rank} · ` : ""
+      tipEl!.innerHTML = `<b>${escapeHtml(c.symbol)}</b> ${escapeHtml(c.name)}<br>${rankLabel}<span style="color:${pos ? "#16c784" : "#ea3943"}">${fmtPct(c.pct)}</span> · ${fmtCap(c.marketCap)}`
       tipEl!.style.display = "block"
       tipEl!.style.left = e.clientX + 14 + "px"
       tipEl!.style.top = e.clientY + 14 + "px"
