@@ -161,4 +161,95 @@ describe("expandTemplates", () => {
     expect(out[0].id).toBe("tpl:dup-low") // sort=10 wins over sort=90
     expect(out[0].url).toBe("https://bitcoin.org") // trailing slash stripped
   })
+
+  // Case 7: {contract} pattern — picked from native chain, used {chain} slug from chain_map
+  it("expands {contract}/{chain} patterns using the snapshot's native chain", () => {
+    const dex: LinkTemplate = {
+      id: "dex1",
+      kind: "pattern",
+      category: "dex",
+      label: "DexScreener",
+      icon: "📊",
+      url_pattern: "https://dexscreener.com/{chain}/{contract}",
+      chain_map: { ethereum: "ethereum", solana: "solana" },
+      tier: "Core",
+      sort: 10,
+      enabled: true,
+    }
+    const out = expandTemplates([dex], SAMPLE_VARS, {
+      coingecko: {
+        asset_platform_id: "solana",
+        links: {},
+        detail_platforms: {
+          solana: { contract_address: "SoLAddr", decimal_place: 9 },
+          ethereum: { contract_address: "0xEth", decimal_place: 18 },
+        },
+      },
+    })
+    expect(out).toHaveLength(1)
+    expect(out[0].url).toBe("https://dexscreener.com/solana/SoLAddr")
+  })
+
+  // Case 8: {contract} pattern — unsupported chain in chain_map → row dropped
+  it("drops {contract} patterns when the snapshot's chains are not in chain_map", () => {
+    const dex: LinkTemplate = {
+      id: "dex2",
+      kind: "pattern",
+      category: "dex",
+      label: "DexScreener",
+      icon: "📊",
+      url_pattern: "https://dexscreener.com/{chain}/{contract}",
+      chain_map: { ethereum: "ethereum" }, // no solana
+      tier: "Core",
+      sort: 10,
+      enabled: true,
+    }
+    const out = expandTemplates([dex], SAMPLE_VARS, {
+      coingecko: {
+        asset_platform_id: "solana",
+        links: {},
+        detail_platforms: {
+          solana: { contract_address: "SoL", decimal_place: 9 },
+        },
+      },
+    })
+    expect(out).toHaveLength(0)
+  })
+
+  // Case 9: empty template label → fallback derives from the URL hostname
+  it("falls back to labelFromUrl when the template label is empty", () => {
+    const explorer: LinkTemplate = {
+      id: "expl1",
+      kind: "provider",
+      category: "explorer",
+      label: "", // explorer rows are seeded with empty label
+      icon: "🔎",
+      provider: "coingecko",
+      source_key: "explorer",
+      tier: "Trusted",
+      sort: 10,
+      enabled: true,
+    }
+    const out = expandTemplates([explorer], SAMPLE_VARS, {
+      coingecko: { links: { blockchain_site: ["https://blockchair.com/btc"] } },
+    })
+    expect(out).toHaveLength(1)
+    expect(out[0].label).toBe("Blockchair")
+  })
+
+  // Case 10: empty pattern label with a {slug} template — still uses URL fallback
+  it("falls back to labelFromUrl when the pattern label is empty", () => {
+    const t: LinkTemplate = {
+      id: "p10",
+      kind: "pattern",
+      category: "trade",
+      label: "",
+      url_pattern: "https://www.coingecko.com/en/coins/{slug}",
+      tier: "Core",
+      sort: 10,
+      enabled: true,
+    }
+    const out = expandTemplates([t], SAMPLE_VARS, {})
+    expect(out[0].label).toBe("Coingecko")
+  })
 })

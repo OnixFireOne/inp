@@ -75,6 +75,7 @@ function MobileDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerPr
             categories={data?.categories}
             generated={data?.generated}
             status={data?.status}
+            contract={data?.contract}
             market={market}
             isLoading={isLoading}
             variant="drawer"
@@ -116,6 +117,7 @@ function DesktopDrawer({ open, onOpenChange, coingeckoId, market }: AssetDrawerP
               categories={data?.categories}
               generated={data?.generated}
               status={data?.status}
+              contract={data?.contract}
               market={market}
               isLoading={isLoading}
               variant="drawer"

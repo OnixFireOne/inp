@@ -12,6 +12,8 @@ export interface LinksPayload {
   categories: { key: string; label: string; icon: string | null; sort: number }[]
   generated?: boolean
   status?: "described" | "template" | "undescribed"
+  /** Native-chain contract address from the CG snapshot, plus its chain key. */
+  contract?: { chain: string; address: string } | null
 }
 
 export const linksQueryKey = (coingeckoId: string) => ["links", coingeckoId] as const

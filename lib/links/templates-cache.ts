@@ -24,7 +24,7 @@ export async function getActiveTemplates(): Promise<LinkTemplate[]> {
   const { data, error } = await supabase
     .from("link_templates")
     .select(
-      "id, kind, category, label, icon, url_pattern, provider, source_key, tier, sort, enabled",
+      "id, kind, category, label, icon, url_pattern, provider, source_key, chain_map, tier, sort, enabled",
     )
     .eq("enabled", true)
     .order("category", { ascending: true })
@@ -34,7 +34,17 @@ export async function getActiveTemplates(): Promise<LinkTemplate[]> {
     console.warn("[links] failed to load link_templates", error.message)
     return []
   }
-  const templates = (data ?? []) as LinkTemplate[]
+  // Supabase returns jsonb as a plain object (not a string). If a future
+  // driver ever ships it as a string, normalise here.
+  const templates = ((data ?? []) as Array<Omit<LinkTemplate, "chain_map"> & {
+    chain_map: unknown
+  }>).map((row) => ({
+    ...row,
+    chain_map:
+      row.chain_map && typeof row.chain_map === "object"
+        ? (row.chain_map as Record<string, string>)
+        : null,
+  }))
   await kvSetEx(cacheKey, TTL, templates)
   return templates
 }

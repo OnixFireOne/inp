@@ -36,6 +36,7 @@ import { linksQueryKey } from "@/lib/prefetch"
 import { LinkIcon } from "@/components/LinkIcon"
 import { faviconUrl } from "@/lib/admin/favicon"
 import { adminFetch, AdminForbiddenError } from "@/lib/admin/fetch"
+import { labelFromUrl } from "@/lib/links/label-from-url"
 
 type LinkRow = {
   id: string
@@ -110,6 +111,22 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
   const queryClient = useQueryClient()
 
   const [editing, setEditing] = useState<Partial<LinkRow> | null>(null)
+
+  // Auto-prefill `name` from the typed `href` while the user is creating a
+  // new link and the name field is still empty. Matches the universal
+  // labelFromUrl behaviour for stored/generated rows so the showcase
+  // never has empty labels.
+  useEffect(() => {
+    if (!editing) return
+    if (editing.id) return // only on create
+    const href = (editing.href ?? "").trim()
+    const name = (editing.name ?? "").trim()
+    if (!href) return
+    if (name) return
+    const guess = labelFromUrl(href)
+    if (!guess) return
+    setEditing((prev) => (prev && !prev.name?.trim() ? { ...prev, name: guess } : prev))
+  }, [editing])
 
   // After ANY mutation to the links table, drop the server-side cache for
   // /api/links?cg=<id> (the in-memory kv lives in the Node process) and
