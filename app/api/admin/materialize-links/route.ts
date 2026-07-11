@@ -7,6 +7,7 @@ import { NextRequest } from "next/server"
 import { kvDel, kvSetNx } from "@/lib/kv"
 import { supabaseServer } from "@/lib/supabase/server"
 import { getMarketRowFromCache } from "@/lib/asset-meta/markets-allowlist"
+import { warmMarketRow } from "@/lib/asset-meta/markets-warm"
 import { ensureAssetStub } from "@/lib/asset-meta/stub"
 import { ensureAssetMeta } from "@/lib/asset-meta/ensure"
 import { backfillAssetFromMarket } from "@/lib/links/backfill-asset"
@@ -53,7 +54,11 @@ export async function POST(req: NextRequest) {
 
   // Critical gate before creating a stub: unknown slugs must not materialize
   // into phantom described coins with bogus pattern URLs.
-  const marketRow = await getMarketRowFromCache(coin)
+  // Try the warm KV cache first; on miss, fall back to a single live lookup
+  // via warmMarketRow, which writes the same `markets:ids:{id}` key and opens
+  // the allowlist for subsequent calls.
+  let marketRow = await getMarketRowFromCache(coin)
+  if (!marketRow) marketRow = await warmMarketRow(coin)
   if (!marketRow) return json({ ok: false, error: "unknown coin" }, 404)
 
   const locked = await kvSetNx(lockKey(coin), LOCK_TTL_SECONDS, "1")

@@ -6,6 +6,12 @@
 // See plan/link-templates-spec.md, section "Аспект 2" -> "2.1".
 
 export type CgMeta = {
+  /**
+   * CoinGecko platform key of the token's NATIVE chain (e.g. "ethereum",
+   * "solana"). Optional so older snapshots stay valid (the resolver falls
+   * back to detail_platforms when missing).
+   */
+  asset_platform_id?: string | null
   links: {
     homepage?: string[]
     whitepaper?: string

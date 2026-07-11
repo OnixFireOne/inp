@@ -34,10 +34,12 @@ export function buildTemplateSubmitValues(
     values.url_pattern = editing.url_pattern ?? ""
     values.provider = null
     values.source_key = null
+    values.chain_map = editing.chain_map ?? null
   } else {
     values.url_pattern = null
     values.provider = editing.provider ?? ""
     values.source_key = editing.source_key ?? ""
+    values.chain_map = null
   }
 
   if (options.isCreate) {

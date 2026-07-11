@@ -68,6 +68,10 @@ export function trimCgMeta(raw: Record<string, unknown>): CgMeta {
   const links = (r.links ?? {}) as Record<string, any>
 
   const cg: CgMeta = {
+    asset_platform_id:
+      typeof r.asset_platform_id === "string" && r.asset_platform_id
+        ? r.asset_platform_id
+        : null,
     links: {
       homepage: arrayOfStrings(links.homepage),
       whitepaper: stringOrUndefined(links.whitepaper),

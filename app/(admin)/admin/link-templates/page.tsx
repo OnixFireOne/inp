@@ -41,6 +41,7 @@ import { adminFetch } from "@/lib/admin/fetch"
 import { LinkIcon } from "@/components/LinkIcon"
 import type { LinkTemplate } from "@/lib/links/resolve"
 import { applyPattern, TEMPLATE_VARS, type AssetVars } from "@/lib/links/template-vars"
+import { expandContractPattern, isContractPattern } from "@/lib/links/contract-pattern"
 import { resolveSource } from "@/lib/links/source-registry"
 import type { CgMeta } from "@/lib/links/providers/coingecko/types"
 import {
@@ -67,6 +68,7 @@ const TIERS = ["Core", "Trusted"] as const
 const SAMPLE_VARS: AssetVars = { coingecko_id: "bitcoin", ticker: "BTC" }
 
 const SAMPLE_CG_META: CgMeta = {
+  asset_platform_id: "solana", // pretend this sample is a solana token
   links: {
     homepage: ["https://bitcoin.org"],
     whitepaper: "https://bitcoin.org/bitcoin.pdf",
@@ -77,6 +79,13 @@ const SAMPLE_CG_META: CgMeta = {
     repos_url: { github: ["https://github.com/bitcoin/bitcoin"] },
     chat_url: ["https://t.me/bitcoin"],
     official_forum_url: ["https://bitcointalk.org"],
+  },
+  // Sample detail_platforms so {contract}/{chain} previews can resolve.
+  // Native chain = solana (matches asset_platform_id above), ethereum is
+  // also present so chain maps that don't include solana still produce a URL.
+  detail_platforms: {
+    solana: { contract_address: "SoLaNaSaMpLeToKeNaDdReSs111111111", decimal_place: 9 },
+    ethereum: { contract_address: "0xSaMpLeEt0000000000000000000000000000Beef", decimal_place: 18 },
   },
 }
 
@@ -536,8 +545,20 @@ function TemplateModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing.provider, editing.source_key, kind, isCreate])
 
+  // For {contract} patterns we need the chain map from the form (live) and
+  // a sample CgMeta with detail_platforms — the store uses SAMPLE_CG_META
+  // (which now has solana + ethereum). Preview mirrors the vitrina resolver:
+  // the SAME `expandContractPattern`, just against a synthetic snapshot.
+  const isContract = kind === "pattern" && isContractPattern(editing.url_pattern)
   const previewUrl: string | null = (() => {
     if (kind === "pattern" && editing.url_pattern) {
+      if (isContract) {
+        // Use the form's current chain_map, not what's saved in DB.
+        return (
+          expandContractPattern(editing.url_pattern ?? "", editing.chain_map, SAMPLE_CG_META) ??
+          null
+        )
+      }
       return applyPattern(editing.url_pattern, SAMPLE_VARS)
     }
     if (kind === "provider" && editing.provider && editing.source_key) {
@@ -545,8 +566,18 @@ function TemplateModal({
     }
     return null
   })()
+  // "Битый шаблон" applies ONLY when {slug}/{symbol} fails — {contract}
+  // patterns render their own contextual hint (see previewHint below).
   const previewBroken =
-    kind === "pattern" && !!editing.url_pattern && previewUrl === null
+    kind === "pattern" && !!editing.url_pattern && !isContract && previewUrl === null
+  // For {contract} patterns: empty/incomplete chain map is a hint, not an error.
+  const chainMapEntries = Object.entries(editing.chain_map ?? {}).filter(
+    ([k, v]) => k.trim() && v.trim(),
+  ).length
+  const contractHint =
+    isContract && chainMapEntries === 0
+      ? "Заполни Chain map — сэмпл не знает, как называть чейн для этого сайта."
+      : null
   const previewIcon =
     editing.icon ??
     (kind === "provider"
@@ -653,6 +684,12 @@ function TemplateModal({
                   ))}
                 </div>
               </Field>
+              {isContractPattern(editing.url_pattern) && (
+                <ChainMapEditor
+                  value={editing.chain_map ?? null}
+                  onChange={(cm) => setEditing({ ...editing, chain_map: cm })}
+                />
+              )}
             </div>
           ) : (
             <>
@@ -700,6 +737,9 @@ function TemplateModal({
               Битый шаблон: переменная не разрешилась (applyPattern → null).
             </div>
           )}
+          {contractHint && (
+            <div className="mt-2 text-xs text-amber-600">{contractHint}</div>
+          )}
           {kind === "provider" && !previewUrl && editing.provider && editing.source_key && (
             <div className="mt-2 text-xs text-amber-600">
               Этот источник на сэмпле пуст — добавить можно, но provider-ссылка не появится, пока в снимке монеты не будет данных.
@@ -728,5 +768,153 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="text-xs text-[var(--text-mut)]">{label}</span>
       {children}
     </label>
+  )
+}
+
+// -------------------------------------------------------------
+// ChainMapEditor — appears only when the URL pattern contains {contract}.
+// Each row is "ключ CoinGecko → слаг этого сайта" (e.g. ethereum → eth on GMGN).
+// Keys are pre-populated with common chains; admins can add/remove/edit.
+// We store it as a plain Record<string, string> (matches jsonb in DB).
+// -------------------------------------------------------------
+const COMMON_CHAINS = [
+  "ethereum",
+  "binance-smart-chain",
+  "solana",
+  "base",
+  "arbitrum-one",
+  "polygon-pos",
+  "avalanche",
+  "tron",
+]
+
+function ChainMapEditor({
+  value,
+  onChange,
+}: {
+  value: Record<string, string> | null
+  onChange: (next: Record<string, string> | null) => void
+}) {
+  // Keep rows in a stable order: existing keys first, then any common
+  // chains that aren't yet represented. Empty value → start with one blank row.
+  const known = value ?? {}
+  const rows: Array<{ k: string; v: string }> = []
+  const seen = new Set<string>()
+  for (const [k, v] of Object.entries(known)) {
+    rows.push({ k, v })
+    seen.add(k)
+  }
+  for (const k of COMMON_CHAINS) {
+    if (!seen.has(k)) {
+      rows.push({ k, v: "" })
+    }
+  }
+  if (rows.length === 0) rows.push({ k: "", v: "" })
+
+  // Count only rows with a non-empty KEY — that's what's actually
+  // persisted. Empty-key rows are mid-edit ghosts.
+  const filledCount = rows.filter((r) => r.k.trim()).length
+
+  function setRow(idx: number, patch: Partial<{ k: string; v: string }>) {
+    const next = rows.map((r, i) => (i === idx ? { ...r, ...patch } : r))
+    // Build object, ignoring rows with an empty key (the user is mid-edit).
+    const obj: Record<string, string> = {}
+    for (const r of next) {
+      const k = r.k.trim()
+      if (!k) continue
+      obj[k] = r.v.trim()
+    }
+    onChange(Object.keys(obj).length ? obj : null)
+  }
+  function removeRow(idx: number) {
+    const next = rows.filter((_, i) => i !== idx)
+    if (next.length === 0) next.push({ k: "", v: "" })
+    const obj: Record<string, string> = {}
+    for (const r of next) {
+      const k = r.k.trim()
+      if (!k) continue
+      obj[k] = r.v.trim()
+    }
+    onChange(Object.keys(obj).length ? obj : null)
+  }
+  function addRow() {
+    onChange({ ...known, "": "" })
+  }
+
+  return (
+    <details className="mt-2 rounded border border-[var(--border)] group">
+      <summary className="cursor-pointer select-none px-2 py-1.5 text-xs flex items-center justify-between">
+        <span>
+          Chain map ({`{chain}`} → слаг этого сайта) — {filledCount}{" "}
+          {filledCount === 1 ? "строка" : filledCount < 5 ? "строки" : "строк"}
+        </span>
+        <span className="text-[var(--text-mut)] group-open:hidden">развернуть</span>
+        <span className="text-[var(--text-mut)] hidden group-open:inline">свернуть</span>
+      </summary>
+      <div className="px-2 pb-2 space-y-2">
+        <div className="text-[11px] text-[var(--text-mut)]">
+          Ключ — идентификатор чейна в CoinGecko (ethereum, binance-smart-chain, solana…).
+          Слаг подставляется вместо {`{chain}`}. Незнакомый чейн → ссылка не строится.
+        </div>
+        <div className="grid grid-cols-[1fr_1fr_auto] gap-1 text-xs">
+          <span className="text-[var(--text-mut)]">Ключ CG</span>
+          <span className="text-[var(--text-mut)]">Слаг сайта</span>
+          <span />
+          {rows.map((r, i) => (
+            <ChainMapRow
+              key={i}
+              cgKey={r.k}
+              slug={r.v}
+              onChange={(patch) => setRow(i, patch)}
+              onRemove={() => removeRow(i)}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={addRow}
+          className="w-full text-[11px] py-1 rounded border border-dashed text-[var(--text-mut)] hover:text-[var(--text)] hover:border-[var(--text)] cursor-pointer"
+        >
+          + Добавить строку
+        </button>
+      </div>
+    </details>
+  )
+}
+
+function ChainMapRow({
+  cgKey,
+  slug,
+  onChange,
+  onRemove,
+}: {
+  cgKey: string
+  slug: string
+  onChange: (patch: Partial<{ k: string; v: string }>) => void
+  onRemove: () => void
+}) {
+  return (
+    <>
+      <input
+        value={cgKey}
+        onChange={(e) => onChange({ k: e.target.value })}
+        placeholder="ethereum"
+        className="border rounded px-2 py-1 bg-[var(--surface)] font-mono"
+      />
+      <input
+        value={slug}
+        onChange={(e) => onChange({ v: e.target.value })}
+        placeholder="ethereum"
+        className="border rounded px-2 py-1 bg-[var(--surface)] font-mono"
+      />
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label="Удалить строку"
+        className="w-7 h-7 text-rose-600 hover:text-rose-500 text-sm cursor-pointer"
+      >
+        ×
+      </button>
+    </>
   )
 }

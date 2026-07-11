@@ -8,6 +8,7 @@
 // Drawer-only chrome (drag handle, close button) is rendered only when
 // variant="drawer". In "page" mode the parent page supplies its own header.
 
+import { useState } from "react"
 import { LinkList } from "./LinkList"
 import { GeneratedBadge } from "./GeneratedBadge"
 import type { Link } from "@/types/asset"
@@ -45,6 +46,8 @@ interface AssetOverviewProps {
   categories?: CategoryMeta[]
   generated?: boolean
   status?: "described" | "template" | "undescribed"
+  /** Native-chain contract from the CoinGecko snapshot, if any. */
+  contract?: { chain: string; address: string } | null
   isLoading?: boolean
   variant: "drawer" | "page"
   onClose?: () => void
@@ -57,6 +60,7 @@ export function AssetOverview({
   categories,
   generated,
   status,
+  contract,
   isLoading = false,
   variant,
   onClose,
@@ -108,6 +112,12 @@ export function AssetOverview({
         </div>
       )}
 
+      {/* Copy contract chip (drawer only) — for mem traders. Hidden on
+          page variant: the page already shows the contract in its own block. */}
+      {variant === "drawer" && contract && (
+        <CopyContractChip chain={contract.chain} address={contract.address} />
+      )}
+
       {/* Body */}
       <div className={variant === "drawer" ? "drawer-body flex-1 min-h-0" : ""}>
         <div className={variant === "drawer" ? "drawer-scroll p-5" : "p-6"}>
@@ -146,6 +156,58 @@ function EmptyState() {
       <div className="text-sm text-[var(--text-mut)]">
         Мы ещё не добавили этот актив в каталог.
       </div>
+    </div>
+  )
+}
+
+// -------------------------------------------------------------
+// CopyContractChip
+// -------------------------------------------------------------
+// Shows the native-chain contract address with a one-click copy. Designed
+// to be the FIRST thing a memecoin trader sees — pasting the address into
+// their wallet/Dextool is the dominant action after recognising a coin.
+// State machine: "copy" → "copied" → reverts after 1.5s. We don't show
+// errors (clipboard API failures aren't actionable here).
+// -------------------------------------------------------------
+function CopyContractChip({ chain, address }: { chain: string; address: string }) {
+  const [state, setState] = useState<"idle" | "copied">("idle")
+
+  // Show first 6 / last 4 chars like explorers do. Fall back to the whole
+  // string for very short addresses.
+  const short =
+    address.length > 12
+      ? `${address.slice(0, 6)}…${address.slice(-4)}`
+      : address
+
+  async function onCopy() {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(address)
+        setState("copied")
+        setTimeout(() => setState("idle"), 1500)
+      }
+    } catch {
+      /* clipboard not available; ignore — the address is still readable */
+    }
+  }
+
+  return (
+    <div className="px-5 pt-3 pb-1 shrink-0">
+      <button
+        type="button"
+        onClick={onCopy}
+        title={`${chain}: ${address}`}
+        aria-label={`Скопировать контракт ${address}`}
+        className="inline-flex items-center gap-2 max-w-full rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs hover:bg-[var(--surface)] cursor-pointer"
+      >
+        <span className="text-[10px] uppercase tracking-wide text-[var(--text-mut)]">
+          CA · {chain}
+        </span>
+        <span className="font-mono text-[var(--text)] truncate">{short}</span>
+        <span aria-hidden className="text-[var(--text-mut)]">
+          {state === "copied" ? "✓" : "⧉"}
+        </span>
+      </button>
     </div>
   )
 }

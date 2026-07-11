@@ -11,6 +11,7 @@ const RAW = {
   id: "bitcoin",
   symbol: "btc",
   name: "Bitcoin",
+  asset_platform_id: null, // BTC is a native coin
   // Stuff we DON'T want to keep:
   localization: { en: "Bitcoin" },
   description: { en: "long text..." },
@@ -56,6 +57,19 @@ describe("trimCgMeta", () => {
     expect(out.detail_platforms?.ethereum.contract_address).toBe("0xabc")
     expect(out.detail_platforms?.ethereum.decimal_place).toBe(8)
     expect(out.image?.large).toBe("https://i/btc-large.png")
+    expect(out.asset_platform_id).toBeNull()
+  })
+
+  it("persists asset_platform_id when the coin is a token", () => {
+    const out = trimCgMeta({
+      id: "pepe",
+      asset_platform_id: "ethereum",
+      detail_platforms: {
+        ethereum: { contract_address: "0xPePe", decimal_place: 18 },
+      },
+      links: {},
+    })
+    expect(out.asset_platform_id).toBe("ethereum")
   })
 })
 

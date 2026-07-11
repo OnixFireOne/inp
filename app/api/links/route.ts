@@ -38,6 +38,8 @@ type LinksPayload = {
   categories: CategoryMeta[]
   generated: boolean
   status: "described" | "template" | "undescribed"
+  /** Native-chain contract address from the CG snapshot, or null. */
+  contract: { chain: string; address: string } | null
 }
 
 const TTL = Number(process.env.LINKS_TTL_SECONDS ?? 60)
@@ -101,7 +103,7 @@ export async function GET(req: NextRequest) {
   ])
 
   const assetVars = buildAssetVars(cg, asset, marketRow)
-  const payload = composeLinksPayload<CategoryMeta>({
+  const composed = composeLinksPayload<CategoryMeta>({
     asset,
     assetId,
     curated,
@@ -110,6 +112,9 @@ export async function GET(req: NextRequest) {
     assetVars,
     metaByProvider: meta?.data ? { coingecko: meta.data } : {},
   })
+
+  const contract = pickNativeContract(meta?.data)
+  const payload: LinksPayload = { ...composed, contract }
 
   await kvSetEx(cacheKey, TTL, payload)
   return json(payload)
@@ -187,6 +192,7 @@ function emptyPayload(): LinksPayload {
     categories: [],
     generated: false,
     status: "undescribed",
+    contract: null,
   }
 }
 
@@ -235,4 +241,22 @@ function dedupeCategoriesByKey(rows: CategoryMeta[]): CategoryMeta[] {
     }
   }
   return Array.from(byKey.values())
+}
+
+// Pick the native-chain contract address from a CoinGecko snapshot, or null
+// if the asset is a native coin (BTC/ETH/DOGE etc.) or the snapshot is
+// missing. Used by the drawer to show the "Copy contract" chip.
+function pickNativeContract(
+  meta: Record<string, unknown> | null | undefined,
+): { chain: string; address: string } | null {
+  if (!meta || typeof meta !== "object") return null
+  const native = (meta as { asset_platform_id?: unknown }).asset_platform_id
+  const dp = (meta as { detail_platforms?: Record<string, unknown> }).detail_platforms
+  if (typeof native !== "string" || !native) return null
+  if (!dp || typeof dp !== "object") return null
+  const info = dp[native] as { contract_address?: unknown } | undefined
+  if (!info || typeof info !== "object") return null
+  const addr = typeof info.contract_address === "string" ? info.contract_address.trim() : ""
+  if (!addr) return null
+  return { chain: native, address: addr }
 }

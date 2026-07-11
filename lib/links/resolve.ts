@@ -3,6 +3,9 @@
 // snapshots into ready-to-render GeneratedLink[]. No I/O, fully testable.
 // See plan/link-templates-spec.md, section "Аспект 3".
 
+import { expandContractPattern, isContractPattern } from "./contract-pattern"
+import { labelFromUrl } from "./label-from-url"
+import type { CgMeta } from "./providers/coingecko/types"
 import { applyPattern, type AssetVars } from "./template-vars"
 import { normalizeUrl, resolveSource } from "./source-registry"
 
@@ -17,6 +20,12 @@ export type LinkTemplate = {
   url_pattern?: string | null
   provider?: string | null
   source_key?: string | null
+  /**
+   * Contract-link chain map: CoinGecko chain key → this site's slug.
+   * Only meaningful when url_pattern contains {contract}; ignored otherwise.
+   * jsonb in DB; parsed at the row level (templates-cache deserialises it).
+   */
+  chain_map?: Record<string, string> | null
   tier: "Core" | "Trusted"
   sort: number
   enabled: boolean
@@ -59,6 +68,20 @@ function renderText(tpl: string, a: AssetVars): string {
 }
 
 /**
+ * Final label for a generated link:
+ *   1) template label with {slug}/{symbol} substituted
+ *   2) if that resolved to empty — derive from the URL hostname
+ *   3) if hostname parsing also fails — fall back to "Ссылка"
+ *
+ * Applied uniformly so every generated link has a displayable name.
+ */
+function resolveLabel(templateLabel: string, asset: AssetVars, url: string): string {
+  const rendered = renderText(templateLabel, asset).trim()
+  if (rendered) return rendered
+  return labelFromUrl(url) ?? "Ссылка"
+}
+
+/**
  * Drop duplicate URLs, keeping the first in stable (category, _sort) order.
  * Note: `category` ordering is alphabetical here — the final category order
  * for the storefront is applied later in /api/links (Aspect 5) using
@@ -92,7 +115,13 @@ export function expandTemplates(
     const provider = t.provider ?? ""
     const url =
       t.kind === "pattern"
-        ? applyPattern(t.url_pattern ?? "", asset)
+        ? isContractPattern(t.url_pattern)
+          ? expandContractPattern(
+              t.url_pattern ?? "",
+              t.chain_map,
+              metaByProvider.coingecko as CgMeta | undefined,
+            ) ?? null
+          : applyPattern(t.url_pattern ?? "", asset)
         : metaByProvider[provider]
           ? resolveSource(
               provider,
@@ -106,7 +135,7 @@ export function expandTemplates(
     out.push({
       id: `tpl:${t.id}`,
       url,
-      label: renderText(t.label, asset),
+      label: resolveLabel(t.label, asset, url),
       icon: t.icon ?? undefined,
       category: t.category,
       tier: t.tier,
