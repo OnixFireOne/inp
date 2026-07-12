@@ -354,3 +354,95 @@ pre {
 .asset-row td:nth-child(3) span {
   font-weight: 700;
 }
+
+/* ============================================
+   Admin polish: cursors and interactive states
+   ============================================ */
+
+/* All buttons and clickable elements get pointer cursor */
+button:not(:disabled),
+[role="button"],
+a,
+select,
+input[type="checkbox"],
+input[type="radio"],
+label:has(input[type="checkbox"]),
+label:has(input[type="radio"]) {
+  cursor: pointer;
+}
+
+/* Disabled elements */
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Generic button polish — applied to any element with `.btn` or `<button>`.
+   Hover/active/focus-visible states in admin palette. */
+button,
+.btn {
+  transition: background-color 120ms ease, color 120ms ease,
+    border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+
+/* Visible focus ring (keyboard nav) */
+button:focus-visible,
+.btn:focus-visible,
+[role="button"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  border-radius: 6px;
+}
+
+/* Subtle press feedback */
+button:not(:disabled):active,
+.btn:not(:disabled):active,
+[role="button"]:active {
+  transform: scale(0.98);
+}
+
+/* Default bordered button: hover bg lift, applies to most admin buttons */
+.btn-default {
+  background-color: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn-default:hover:not(:disabled) {
+  background-color: var(--surface);
+  border-color: var(--accent);
+}
+
+/* Primary button (filled w/ foreground) */
+.btn-primary {
+  background-color: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.btn-primary:active:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+/* Ghost button (no border, transparent bg) */
+.btn-ghost {
+  background-color: transparent;
+  border: 1px solid transparent;
+}
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--surface-2);
+}
+
+/* Clickable icon buttons */
+.admin-clickable {
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.admin-clickable:hover {
+  color: var(--text);
+  background-color: var(--surface-2);
+}

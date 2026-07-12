@@ -212,7 +212,7 @@ export function AssetEditor({
           <button
             type="submit"
             disabled={formLoading}
-            className="px-3 py-1.5 rounded border bg-foreground text-background text-sm disabled:opacity-50"
+            className="px-3 py-1.5 rounded border bg-foreground text-background text-sm disabled:opacity-50 btn-primary"
           >
             {formLoading ? "Сохранение…" : isEdit ? "Сохранить" : "Создать"}
           </button>
@@ -221,12 +221,12 @@ export function AssetEditor({
               type="button"
               onClick={handleMaterialize}
               disabled={materializing}
-              className="px-3 py-1.5 rounded border text-sm disabled:opacity-50"
+              className="px-3 py-1.5 rounded border text-sm disabled:opacity-50 btn-default"
             >
               {materializing ? "Материализация…" : "Материализовать"}
             </button>
           )}
-          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded border text-sm">
+          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded border text-sm btn-default">
             Закрыть
           </button>
         </div>

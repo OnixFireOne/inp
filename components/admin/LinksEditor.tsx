@@ -13,6 +13,7 @@
 // Tier values: "Core" and "Trusted" (External tier was removed).
 import { useState, useMemo, useEffect } from "react"
 import * as Dialog from "@radix-ui/react-dialog"
+import { Checkbox } from "./Checkbox"
 import {
   DndContext,
   closestCenter,
@@ -247,7 +248,7 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
         <h3 className="font-medium">Ссылки ({rows.length})</h3>
         <button
           onClick={() => setEditing({ asset_id: assetId, tier: "Trusted", category: "tools", health: "alive", is_top: false })}
-          className="px-3 py-1.5 rounded border text-sm cursor-pointer"
+          className="px-3 py-1.5 rounded border text-sm cursor-pointer btn-default"
         >
           + Добавить ссылку
         </button>
@@ -380,10 +381,7 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
                     </select>
                   </Field>
                   <Field label="is_top">
-                    <label className="flex items-center gap-2">
-                      <input type="checkbox" checked={!!editing.is_top} onChange={(e) => setEditing({ ...editing, is_top: e.target.checked })} />
-                      <span className="text-sm">в топе</span>
-                    </label>
+                    <Checkbox checked={!!editing.is_top} onChange={(e) => setEditing({ ...editing, is_top: e.target.checked })} />
                   </Field>
                 </div>
                 {/* live preview — как в редакторе шаблонов */}
@@ -405,8 +403,8 @@ export function LinksEditor({ assetId, coingeckoId }: { assetId: string; coingec
                   </div>
                 </div>
                 <div className="flex gap-2 pt-3">
-                  <button onClick={submit} className="px-3 py-1.5 rounded border bg-foreground text-background text-sm cursor-pointer">Сохранить</button>
-                  <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded border text-sm cursor-pointer">Отмена</button>
+                  <button onClick={submit} className="px-3 py-1.5 rounded border bg-foreground text-background text-sm cursor-pointer btn-primary">Сохранить</button>
+                  <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded border text-sm cursor-pointer btn-default">Отмена</button>
                 </div>
               </>
             )}
@@ -465,13 +463,13 @@ function SortableRow({
         {category ? `${category.icon ?? ""} ${category.label}` : row.category}
       </span>
       {row.is_top && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-200/40">top</span>}
-      <button onClick={onEdit} className="text-xs text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer" aria-label="Редактировать">
+      <button onClick={onEdit} className="text-xs text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer btn-ghost" aria-label="Редактировать">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
         </svg>
       </button>
-      <button onClick={onDelete} className="text-xs text-rose-600 hover:text-rose-500 cursor-pointer">×</button>
+      <button onClick={onDelete} className="text-xs text-rose-600 hover:text-rose-500 cursor-pointer btn-ghost">×</button>
     </div>
   )
 }
@@ -948,7 +946,7 @@ function SortableCategoryRow({
             type="button"
             onClick={saveEdit}
             disabled={savingEdit}
-            className="px-2.5 py-1 text-xs rounded border bg-foreground text-background disabled:opacity-50 cursor-pointer"
+            className="px-2.5 py-1 text-xs rounded border bg-foreground text-background disabled:opacity-50 cursor-pointer btn-primary"
           >
             {savingEdit ? "..." : "Сохранить"}
           </button>
@@ -1058,7 +1056,7 @@ function AssetCategoryCreator({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="px-2.5 py-1 text-xs rounded border cursor-pointer"
+        className="px-2.5 py-1 text-xs rounded border cursor-pointer btn-default"
       >
         + Категория для этой монеты
       </button>
@@ -1091,7 +1089,7 @@ function AssetCategoryCreator({
       <button
         onClick={submit}
         disabled={saving}
-        className="px-2.5 py-1 text-xs rounded border cursor-pointer"
+        className="px-2.5 py-1 text-xs rounded border cursor-pointer btn-primary"
       >
         {saving ? "..." : "Создать"}
       </button>
@@ -1100,7 +1098,7 @@ function AssetCategoryCreator({
           setOpen(false)
           setError(null)
         }}
-        className="px-2.5 py-1 text-xs rounded cursor-pointer text-[var(--text-mut)]"
+        className="px-2.5 py-1 text-xs rounded cursor-pointer text-[var(--text-mut)] btn-ghost"
       >
         Отмена
       </button>
