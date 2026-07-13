@@ -7,6 +7,14 @@
 //
 // Drawer-only chrome (drag handle, close button) is rendered only when
 // variant="drawer". In "page" mode the parent page supplies its own header.
+//
+// OPEN PERFORMANCE:
+//   The header (name, symbol, icon, price, %24h, market cap) renders from
+//   the `market` prop synchronously. The drawer is INSTANTLY populated —
+//   the network fetch for /api/links only fills the LinkList area below.
+//   `isLoading` (true only when there's no cached links payload yet) is
+//   scoped to the body, so even during a cold first fetch the user sees
+//   real data up top, not a generic skeleton.
 
 import { useState } from "react"
 import { LinkList } from "./LinkList"
@@ -48,9 +56,46 @@ interface AssetOverviewProps {
   status?: "described" | "template" | "undescribed"
   /** Native-chain contract from the CoinGecko snapshot, if any. */
   contract?: { chain: string; address: string } | null
+  /** True ONLY when we have no cached links AND a fetch is in flight. */
   isLoading?: boolean
   variant: "drawer" | "page"
   onClose?: () => void
+}
+
+// Compact price block used in the drawer header. No external deps — we have
+// the values already in the MarketRow prop.
+function PriceBlock({ market }: { market?: AssetOverviewMarket }) {
+  if (!market) return null
+  const price =
+    market.price == null
+      ? "—"
+      : market.price >= 1
+        ? `$${market.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+        : `$${market.price.toPrecision(4)}`
+  const pct = market.change24h
+  const pctPos = pct >= 0
+  return (
+    <div className="flex items-center gap-3 text-sm tabular-nums">
+      <span className="font-semibold">{price}</span>
+      <span style={{ color: pctPos ? "#16c784" : "#ea3943" }}>
+        {pctPos ? "+" : ""}
+        {pct.toFixed(2)}%
+      </span>
+      {market.marketCap != null && (
+        <span className="text-[var(--text-mut)] text-xs">
+          cap ${marketCapShort(market.marketCap)}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function marketCapShort(v: number): string {
+  if (v >= 1e12) return `${(v / 1e12).toFixed(2)}T`
+  if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`
+  if (v >= 1e6) return `${(v / 1e6).toFixed(0)}M`
+  if (v >= 1e3) return `${(v / 1e3).toFixed(0)}K`
+  return String(v)
 }
 
 export function AssetOverview({
@@ -78,9 +123,9 @@ export function AssetOverview({
         </div>
       )}
 
-      {/* Header (drawer variant has close button; page variant renders its own header in parent) */}
+      {/* Header — renders INSTANTLY from the market prop. No network wait. */}
       {variant === "drawer" && (
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)] shrink-0">
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--border)] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             {icon ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -99,11 +144,19 @@ export function AssetOverview({
                 <span className="font-semibold truncate">{displayName || "—"}</span>
                 <GeneratedBadge generated={generated} status={status ?? asset?.status ?? undefined} />
               </div>
-              <div className="text-xs text-[var(--text-mut)] uppercase">{displaySymbol}</div>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-xs text-[var(--text-mut)] uppercase">{displaySymbol}</span>
+                {market && (
+                  <>
+                    <span className="text-[var(--text-mut)] text-xs">·</span>
+                    <PriceBlock market={market} />
+                  </>
+                )}
+              </div>
             </div>
           </div>
           {onClose && (
-            <button onClick={onClose} aria-label="Close" className="icon-btn w-9 h-9">
+            <button onClick={onClose} aria-label="Close" className="icon-btn w-9 h-9 shrink-0">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
@@ -118,7 +171,7 @@ export function AssetOverview({
         <CopyContractChip chain={contract.chain} address={contract.address} />
       )}
 
-      {/* Body */}
+      {/* Body — LinkList area. Skeleton only here. */}
       <div className={variant === "drawer" ? "drawer-body flex-1 min-h-0" : ""}>
         <div className={variant === "drawer" ? "drawer-scroll p-5" : "p-6"}>
           {isLoading ? (

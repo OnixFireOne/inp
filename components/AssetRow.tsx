@@ -13,7 +13,7 @@ import { ChangeCell } from "./ChangeCell"
 import { MarketCapCell } from "./MarketCapCell"
 import type { MarketRow, SparkWindow } from "@/lib/types"
 import { warmTradingView } from "@/components/TvChart"
-import { prefetchLinks, stashMarketRow, linksQueryKey, fetchLinksPayload } from "@/lib/prefetch"
+import { prefetchLinksOnHover, prefetchLinksOnPointerDown, stashMarketRow, linksQueryKey, fetchLinksPayload, LINKS_STALE_MS, LINKS_GC_MS } from "@/lib/prefetch"
 import { useOpenAsset } from "@/lib/useOpenAsset"
 
 interface AssetRowProps {
@@ -33,7 +33,7 @@ export function AssetRow({
   show1y = false,
   onOpenChart,
 }: AssetRowProps) {
-  const openAsset = useOpenAsset()
+  const { open: openAsset, prefetch: prefetchAsset } = useOpenAsset()
   const qc = useQueryClient()
   const isAll = row.id === "all"
   const positive = row.change24h >= 0
@@ -54,7 +54,9 @@ export function AssetRow({
         const data = await qc.fetchQuery({
           queryKey: linksQueryKey(row.id),
           queryFn: ({ signal }) => fetchLinksPayload(row.id, signal),
-          staleTime: 60_000,
+          // links are admin-curated — same freshness policy as the drawer
+          staleTime: LINKS_STALE_MS,
+          gcTime: LINKS_GC_MS,
         })
         symbol = data?.asset?.tv_symbol?.trim() || fallback
       } catch {
@@ -66,8 +68,21 @@ export function AssetRow({
 
   function handleHover() {
     // Warm RQ cache with the same queryKey used by AssetDrawer → instant open.
+    // Debounced (150ms) so a fast scan across many rows costs ~1 request, not 50.
     stashMarketRow(qc, row)
-    prefetchLinks(qc, row.id)
+    prefetchLinksOnHover(qc, row.id)
+    // Prefetch the RSC payload for the intercepted modal so the navigation
+    // itself doesn't block on a fresh RSC fetch.
+    prefetchAsset(row.id)
+    warmTradingView()
+  }
+
+  function handlePointerDown() {
+    // Touch devices and fast clickers: skip the hover debounce, kick off
+    // immediately on first contact.
+    stashMarketRow(qc, row)
+    prefetchLinksOnPointerDown(qc, row.id)
+    prefetchAsset(row.id)
     warmTradingView()
   }
 
@@ -75,6 +90,7 @@ export function AssetRow({
     <tr
       className="asset-row row-h border-b border-[var(--border)] hover:bg-[var(--surface)] transition-colors cursor-pointer"
       onMouseEnter={handleHover}
+      onPointerDown={handlePointerDown}
       onClick={handleOpenDrawer}
     >
       <td className="px-4 text-[var(--text-mut)] tabular-nums text-sm align-middle">

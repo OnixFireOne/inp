@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { usePathname } from "next/navigation"
 import { useQueryClient } from "@tanstack/react-query"
 import type { MarketRow } from "@/lib/types"
-import { prefetchLinks } from "@/lib/prefetch"
+import { prefetchLinks, prefetchLinksOnHover, prefetchLinksOnPointerDown } from "@/lib/prefetch"
 import { useOpenAsset } from "@/lib/useOpenAsset"
 
 // -------------------------------------------------------------
@@ -121,7 +121,7 @@ function fmtPct(p: number) {
 // Component
 // -------------------------------------------------------------
 export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps) {
-  const openAsset = useOpenAsset()
+  const { open: openAsset, prefetch: prefetchAsset } = useOpenAsset()
   const pathname = usePathname()
   const qc = useQueryClient()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -129,12 +129,17 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const axisRef = useRef<HTMLCanvasElement | null>(null)
   const tipRef = useRef<HTMLDivElement | null>(null)
   const openAssetRef = useRef(openAsset)
+  const prefetchAssetRef = useRef(prefetchAsset)
   // Выбранная монета (только ref — draw() читает напрямую, без ре-рендера).
   const selectedIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     openAssetRef.current = openAsset
   }, [openAsset])
+
+  useEffect(() => {
+    prefetchAssetRef.current = prefetchAsset
+  }, [prefetchAsset])
 
   // -------------------- Slider state -----------------------------
   const [mode, setMode] = useState<Mode>("both")
@@ -1074,6 +1079,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
           s.hoverNode = pin.node
           s.hoverIdx = pin.node.idx
           showTip(e, pin.node)
+          // Warm the React Query cache so the drawer opens instantly on click.
+          prefetchLinksOnHover(qc, pin.node.c.id)
+          // Warm the RSC payload for the intercepted modal route.
+          prefetchAssetRef.current(pin.node.c.id)
           return
         }
       }
@@ -1096,8 +1105,11 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       }
       s.hoverIdx = found
       s.hoverNode = foundNode
-      if (found >= 0) showTip(e, foundNode!)
-      else hideTip()
+      if (found >= 0) {
+        showTip(e, foundNode!)
+        prefetchLinksOnHover(qc, foundNode!.c.id)
+        prefetchAssetRef.current(foundNode!.c.id)
+      } else hideTip()
     }
     function onCanvasMouseLeave() {
       s.hoverIdx = -1
@@ -1127,7 +1139,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       }
       return best
     }
-    function onCanvasClick(e: MouseEvent) {
+function onCanvasClick(e: MouseEvent) {
       if (s.didDrag) return
       // Резолвим монету по координатам клика: hoverNode может обнулиться микродвижением мыши при зажатой кнопке.
       const r = cv!.getBoundingClientRect()
@@ -1137,12 +1149,30 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       // Выделяем монету (визуально) — отдельный ref, чтобы draw() читал напрямую.
       // Повторный клик по этой же монете или выбор другой — просто перезаписывает id.
       selectedIdRef.current = coin.id
-      // Stash the market row (with image) before navigating, so the modal header has it immediately.
+      // Stash the market row (with image) before navigating, so the modal
+      // header has price/%24h/marketCap INSTANTLY. We pass the MarketRow
+      // (not just the id) so useOpenAsset's internal stashMarketRow call
+      // populates the RQ cache and AssetDrawer's `market` prop is filled.
       const marketRow = rowsRef.current.find((r) => r.id === coin.id)
+      if (!marketRow) {
+        // Shouldn't happen — every plotted coin comes from `rowsRef` — but
+        // bailing here is safer than opening a drawer with no header data.
+        return
+      }
       prefetchLinks(qc, coin.id)
       // Open the existing intercepting modal at /asset/[id].
-      // AssetRow uses the same pattern.
-      openAssetRef.current(marketRow ?? coin.id)
+      openAssetRef.current(marketRow)
+    }
+
+    // Touch / fast-click: pre-warm the cache before the synthetic click
+    // resolves. No debounce — touch users have no hover, so the click IS the
+    // earliest signal we get.
+    function onCanvasPointerDown(e: PointerEvent) {
+      const r = cv!.getBoundingClientRect()
+      const node = nodeAt(e.clientX - r.left, e.clientY - r.top)
+      if (!node) return
+      prefetchLinksOnPointerDown(qc, node.c.id)
+      prefetchAssetRef.current(node.c.id)
     }
 
     function showTip(e: MouseEvent, node: Node) {
@@ -1209,6 +1239,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     // ---- Event wiring ----------------------------------------
     cv.addEventListener("wheel", onWheel, { passive: false })
     cv.addEventListener("mousedown", onMouseDown)
+    cv.addEventListener("pointerdown", onCanvasPointerDown)
     cv.addEventListener("mousemove", onCanvasMouseMove)
     cv.addEventListener("mouseleave", onCanvasMouseLeave)
     cv.addEventListener("click", onCanvasClick)
@@ -1224,6 +1255,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       ro.disconnect()
       cv.removeEventListener("wheel", onWheel)
       cv.removeEventListener("mousedown", onMouseDown)
+      cv.removeEventListener("pointerdown", onCanvasPointerDown)
       cv.removeEventListener("mousemove", onCanvasMouseMove)
       cv.removeEventListener("mouseleave", onCanvasMouseLeave)
       cv.removeEventListener("click", onCanvasClick)

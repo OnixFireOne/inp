@@ -6,6 +6,27 @@
 //
 //   GET /api/links?cg=<coingeckoId>
 //   -> { asset, links, categories, generated, status }
+//
+// PERFORMANCE NOTES
+//   • Cached at the edge: TTL = LINKS_TTL_SECONDS (default 6h) for FULL
+//     payloads (meta present + curated links or composed templates).
+//     DEGRADED payloads (cold-path timeout, no meta, empty links) get a
+//     short TTL_DEGRADED_SECONDS (default 60s) and a one-shot retry via
+//     the in-flight ensure → bustLinkCaches path. Without this split, a
+//     5s ensure-timeout would lock the empty payload behind a 6h CDN cache
+//     and the eventual successful upsert wouldn't be visible for hours.
+//   • On a cold first read for a template coin, the CoinGecko snapshot is
+//     warmed IN PARALLEL with categories / templates / marketRow. We then
+//     re-read asset, curated links, AND asset_meta AFTER ensure settles —
+//     the initial meta read starts before ensure, so without the second
+//     read we'd cache an empty-meta payload for mem-coins whose snapshot
+//     is being inserted right now. contract chip & template {contract}
+//     substitutions would break.
+//   • No asset/categories/templates reads are started before the
+//     `ensureAssetMetaInline` call — when we DO need the snapshot, it can
+//     create the asset stub and the asset_id reference, so we wait for it
+//     before composing. But the I/O we already kicked off (templates,
+//     meta, marketRow, categories) keeps streaming.
 
 import { NextRequest } from "next/server"
 import { kvGet, kvSetEx } from "@/lib/kv"
@@ -42,7 +63,16 @@ type LinksPayload = {
   contract: { chain: string; address: string } | null
 }
 
-const TTL = Number(process.env.LINKS_TTL_SECONDS ?? 60)
+// Default 6h. Curated links + categories + asset identity only change when
+// an admin edits them (bumping the KV cache version), so a long edge TTL is
+// safe and avoids hammering Supabase on every repeat open.
+const TTL = Number(process.env.LINKS_TTL_SECONDS ?? 6 * 60 * 60)
+// Short TTL for DEGRADED responses (cold-path timeout, meta absent, links
+// empty). Keeps the storefront responsive while letting the in-flight
+// ensure → bustLinkCaches path take effect within one minute.
+const TTL_DEGRADED_SECONDS = Number(
+  process.env.LINKS_TTL_DEGRADED_SECONDS ?? 60,
+)
 const ENSURE_INLINE_TIMEOUT_MS = Number(
   process.env.ENSURE_INLINE_TIMEOUT_MS ?? 5000,
 )
@@ -52,55 +82,81 @@ const ASSET_SELECT =
 
 export async function GET(req: NextRequest) {
   const cg = (req.nextUrl.searchParams.get("cg") ?? "").trim()
-  if (!cg) return json(emptyPayload())
+  if (!cg) return json(emptyPayload(), 200, TTL_DEGRADED_SECONDS)
 
   const cacheKey = await getLinkCacheKey(cg)
   const cached = await kvGet<LinksPayload>(cacheKey)
-  if (cached) return json(cached)
+  if (cached) return json(cached, 200, TTL)
 
   const supabase = await supabaseServer()
   // Asset first: we need its id to load curated links and scoped categories.
   let asset = await loadAsset(supabase, cg)
-
   let curated = asset ? await loadCuratedLinks(supabase, asset.id) : ([] as Link[])
 
-  // Cold/template coin without curated links: do the snapshot warm inline so
-  // the first response can include provider links and {symbol} patterns.
-  // Described/curated coins never wait here.
+  // Cold/template coin without curated links: do the snapshot warm INLINE
+  // but run it concurrently with every other read below. Described/curated
+  // coins skip this branch entirely.
   const needsSnapshot =
     (!asset || asset.status === "template") && (curated?.length ?? 0) === 0
+
+  // Fire the ensure immediately. We await its slot in the Promise.all below
+  // so the entire response waits at most ENSURE_INLINE_TIMEOUT_MS, not
+  // (ensure + everything else).
+  const ensurePromise: Promise<void> = needsSnapshot
+    ? ensureAssetMetaInline(cg, ENSURE_INLINE_TIMEOUT_MS)
+    : Promise.resolve()
+
+  // Meta read also runs in parallel — on the WARM path (needsSnapshot ===
+  // false) this is the only read we need, so we save the roundtrip we'd
+  // pay by re-reading after ensure. On the COLD path we IGNORE this
+  // response and re-read after ensure settles, because the snapshot is
+  // being inserted in parallel and the early read will return null.
+  const metaPromise = supabase
+    .from("asset_meta")
+    .select("data")
+    .eq("asset_id", asset?.id ?? cg)
+    .eq("provider", "coingecko")
+    .maybeSingle() as unknown as Promise<{ data: { data: unknown } | null }>
+
+  // Kick off everything else in parallel. None of these depends on the
+  // ensure outcome *for a cached coin* (needsSnapshot === false). On the
+  // cold path we'll re-read asset/curated/meta AFTER ensure settles, but
+  // the network roundtrips for templates / categories / marketRow run
+  // alongside the snapshot fetch.
+  const [marketRow, templates, categoriesRaw] = await Promise.all([
+    getMarketRowFromCache(cg),
+    getActiveTemplates(),
+    loadCategories(supabase, asset?.id ?? cg, !!asset),
+    ensurePromise, // joined here — gate the response on max(timeout, reads)
+  ])
+  const metaEarlyResp = await metaPromise
+
+  // If ensure ran, the stub might have been created and meta cached. Re-read
+  // the asset row, curated links, AND meta so the payload reflects the
+  // now-warm snapshot.
+  let metaRecord: { data: unknown } | null = metaEarlyResp?.data ?? null
   if (needsSnapshot) {
-    await ensureAssetMetaInline(cg, ENSURE_INLINE_TIMEOUT_MS)
-    // Re-read: ensureAssetMeta may have created the stub, warmed markets:ids,
-    // and inserted asset_meta.
     asset = await loadAsset(supabase, cg)
     curated = asset ? await loadCuratedLinks(supabase, asset.id) : ([] as Link[])
+    const { data: metaFresh } = await supabase
+      .from("asset_meta")
+      .select("data")
+      .eq("asset_id", asset?.id ?? cg)
+      .eq("provider", "coingecko")
+      .maybeSingle()
+    if (metaFresh?.data) metaRecord = metaFresh
   }
-
-  // Read the warmed market row only after inline ensure. This supplies ticker
-  // for {symbol} templates on cold deep links.
-  const marketRow = await getMarketRowFromCache(cg)
 
   // Enrich minimal stubs without blocking render and without overwriting data.
   maybeBackfillAssetFromMarket(asset, marketRow)
 
   const assetId = asset?.id ?? cg
-
-  const categories = await loadCategories(supabase, assetId, !!asset)
   const orderedCategories = applyCategoryOrder(
-    dedupeCategoriesByKey(categories),
+    dedupeCategoriesByKey(categoriesRaw),
     asset?.category_orders ?? null,
   )
 
-  const [{ data: meta }, templates] = await Promise.all([
-    supabase
-      .from("asset_meta")
-      .select("data")
-      .eq("asset_id", asset?.id ?? cg)
-      .eq("provider", "coingecko")
-      .maybeSingle(),
-    getActiveTemplates(),
-  ])
+  const meta = (metaRecord?.data ?? null) as Record<string, unknown> | null
 
   const assetVars = buildAssetVars(cg, asset, marketRow)
   const composed = composeLinksPayload<CategoryMeta>({
@@ -110,14 +166,26 @@ export async function GET(req: NextRequest) {
     categories: orderedCategories,
     templates,
     assetVars,
-    metaByProvider: meta?.data ? { coingecko: meta.data } : {},
+    metaByProvider: meta ? { coingecko: meta } : {},
   })
 
-  const contract = pickNativeContract(meta?.data)
+  const contract = pickNativeContract(meta)
   const payload: LinksPayload = { ...composed, contract }
 
-  await kvSetEx(cacheKey, TTL, payload)
-  return json(payload)
+  // DEGRADED payload detection. The cold path can return a USABLE response
+  // even without meta (generic templates with {slug}/{symbol} substitutions
+  // work fine), so the previous "links.length===0 && !generated &&
+  // !contract && !meta" test was too narrow — a {generated:true, meta:null}
+  // payload would have been cached at full TTL despite missing the contract
+  // chip and dex-specific links. The robust signal is: did the snapshot
+  // we wanted (meta) actually arrive? If we entered the cold path and meta
+  // is still missing, treat the response as degraded — bustLinkCaches from
+  // the in-flight ensure will retire this short-TTL entry within seconds.
+  const isDegraded = needsSnapshot && !meta
+
+  const ttlSeconds = isDegraded ? TTL_DEGRADED_SECONDS : TTL
+  await kvSetEx(cacheKey, ttlSeconds, payload)
+  return json(payload, 200, ttlSeconds)
 }
 
 async function loadCategories(
@@ -160,9 +228,12 @@ async function ensureAssetMetaInline(cg: string, ms: number): Promise<void> {
       }),
     ])
   } catch {
-    // Timeout/error must not block the storefront. The in-flight ensure keeps
-    // running and will bust the per-coin links cache after a successful upsert,
-    // so a subsequent request can pick up the snapshot.
+    // Timeout/error must not block the storefront. The in-flight ensure
+    // keeps running and will (on success) upsert asset_meta AND call
+    // bustLinkCaches(cg) — see lib/asset-meta/ensure.ts:154. That bust
+    // retires the short-TTL degraded payload we just wrote above, so the
+    // next request will recompute and cache the proper payload. Do NOT
+    // long-cache a degraded response or the bust becomes a no-op.
   }
 }
 
@@ -196,12 +267,16 @@ function emptyPayload(): LinksPayload {
   }
 }
 
-function json(data: unknown, status = 200) {
+function json(data: unknown, status = 200, ttlSeconds = TTL) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       "content-type": "application/json",
-      "cache-control": `public, s-maxage=${TTL}, stale-while-revalidate=120`,
+      // Mirror the KV TTL on the edge cache so CDN and origin agree.
+      // stale-while-revalidate kept short so a freshly-invalidated payload
+      // doesn't keep serving from CDN after admin edits or a delayed
+      // ensure-meta upsert.
+      "cache-control": `public, s-maxage=${ttlSeconds}, stale-while-revalidate=60`,
     },
   })
 }
