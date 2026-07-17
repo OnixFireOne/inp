@@ -71,8 +71,9 @@ export function AssetRow({
     // Debounced (150ms) so a fast scan across many rows costs ~1 request, not 50.
     stashMarketRow(qc, row)
     prefetchLinksOnHover(qc, row.id)
-    // Prefetch the RSC payload for the intercepted modal so the navigation
-    // itself doesn't block on a fresh RSC fetch.
+    // No router-side prefetch needed: the drawer is mounted globally and
+    // opens from local state. Data prefetch (prefetchLinks) is the only
+    // work hover can usefully do.
     prefetchAsset(row.id)
     warmTradingView()
   }

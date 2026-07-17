@@ -10,18 +10,14 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
 };
 
-// Parallel route slots:
-//   children → app/page.tsx (the markets table, stays mounted across soft navigations)
-//   modal    → app/@modal/(.)asset/[id]/page.tsx (intercepts /asset/[id] as overlay)
-//
-// Rendering BOTH slots here means: opening a modal does NOT unmount the list.
-// Scroll position, React Query cache, the always-mounted ChartModal — all preserved.
+// AssetDrawer / ChartModal are mounted as global singletons inside
+// <Providers>. No parallel route slots — opening the drawer is a
+// client-state change (window.history.pushState + lib/drawer-state),
+// never a route navigation, so the catalog page never unmounts.
 export default function RootLayout({
   children,
-  modal,
 }: {
   children: React.ReactNode;
-  modal: React.ReactNode;
 }) {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
@@ -36,7 +32,6 @@ export default function RootLayout({
         <Suspense>
           <Providers>
             {children}
-            {modal}
           </Providers>
         </Suspense>
       </body>

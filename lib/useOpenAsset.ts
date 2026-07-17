@@ -1,68 +1,71 @@
 "use client"
 
-// useOpenAsset — opens the /asset/[id] modal from any surface (table row,
-// beeswarm tile, …). On the intercepted route the modal slot mounts
-// AssetDrawer; on a hard navigation the full SEO page renders instead.
+// useOpenAsset — opens the global AssetDrawer overlay. The drawer is
+// mounted once in <Providers> on the storefront layout and reads its
+// open/id from `lib/drawer-state` — there is no router.push, no RSC
+// payload, no Intercepting Route. Click → URL change + drawer state
+// change → drawer renders in the very next frame, with zero network.
 //
-// Hover-time route prefetch lives here too: `prefetchAsset(id)` calls
-// Next's router.prefetch so the RSC payload for the intercepted modal is
-// warm before click. Without this the route navigation is the main
-// remaining delay on a cold cache — even when /api/links is hot.
-//
-// We deduplicate both the data prefetch (RQ) and the route prefetch (RSC)
-// per-id to avoid hammering the network when the user scans a long list.
+// URL SYNC (shareable links + back/forward):
+//   open  → window.history.pushState(null, "", "/asset/<id>")
+//   close → window.history.back()   (reverts to the URL we replaced)
+//   popstate → sync state from the URL (browser Back/Forward buttons).
 
-import { usePathname, useRouter } from "next/navigation"
+import { useCallback } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import {
+  openDrawer,
+  closeDrawer,
+  useDrawerId,
+} from "@/lib/drawer-state"
 import { stashMarketRow } from "@/lib/prefetch"
 import type { MarketRow } from "@/lib/types"
 
-// Module-level set — survives across component instances but is per-tab.
-// Cheap dedupe of `router.prefetch("/asset/<id>")` calls.
-const routerPrefetched = new Set<string>()
-
 export function useOpenAsset() {
-  const router = useRouter()
-  const pathname = usePathname()
   const qc = useQueryClient()
+  const currentId = useDrawerId()
 
-  function navigate(id: string) {
-    if (pathname?.startsWith("/asset/")) {
-      router.replace(`/asset/${id}`, { scroll: false })
-    } else {
-      router.push(`/asset/${id}`, { scroll: false })
+  const open = useCallback(
+    (rowOrId: MarketRow | string) => {
+      const id = typeof rowOrId === "string" ? rowOrId : rowOrId.id
+      if (typeof rowOrId !== "string") stashMarketRow(qc, rowOrId)
+
+      // URL: push a new entry only if the active URL isn't already
+      // /asset/<id>. Reopening the same coin must not stack history.
+      const target = `/asset/${id}`
+      const isOnAsset = typeof window !== "undefined" &&
+        window.location.pathname === target
+      if (typeof window !== "undefined") {
+        if (!isOnAsset) {
+          window.history.pushState(null, "", target)
+        }
+        // Else: drawer already shows this id — leave URL alone.
+      }
+      openDrawer(rowOrId)
+    },
+    [qc],
+  )
+
+  const close = useCallback(() => {
+    closeDrawer()
+    if (typeof window !== "undefined") {
+      // Prefer history.back so the user's previous URL is restored exactly.
+      // Only go back if the current entry IS the asset page (guard against
+      // reopening via menu / external nav landing us on /asset/[id]).
+      if (window.location.pathname.startsWith("/asset/")) {
+        window.history.back()
+      }
     }
-  }
+  }, [])
 
-  function open(rowOrId: MarketRow | string) {
-    const id = typeof rowOrId === "string" ? rowOrId : rowOrId.id
-    if (typeof rowOrId !== "string") stashMarketRow(qc, rowOrId)
-    // Mark the route as prefetched — we're about to navigate, so any
-    // hover-prefetch work is already paid for.
-    routerPrefetched.add(id)
-    navigate(id)
-  }
+  // The previous hook returned a `prefetch` helper for the RSC payload
+  // of the intercepted route. With local-state routing the drawer has
+  // no RSC dependency; data prefetch happens through `prefetchLinks`
+  // in `lib/prefetch.ts`. We keep the function shape stable for callers
+  // that still destructure `{ prefetch }` — it's now a deliberate no-op.
+  const prefetch = useCallback((_rowOrId: MarketRow | string) => {
+    /* no-op — drawer data is hydrated via prefetchLinks (RQ), not RSC */
+  }, [])
 
-  /**
-   * Hover-time route prefetch. Cheap because Next dedupes internally; we
-   * also gate at this layer so a long list scan only triggers one
-   * `router.prefetch` per coin per tab.
-   */
-  function prefetch(rowOrId: MarketRow | string) {
-    const id = typeof rowOrId === "string" ? rowOrId : rowOrId.id
-    if (routerPrefetched.has(id)) return
-    routerPrefetched.add(id)
-    if (typeof window === "undefined") return
-    // `router.prefetch` is a no-op for the current route and on most
-    // hard-cached routes; calling it on every hover of the same coin
-    // would still cost nothing extra once warmed, but the Set gate keeps
-    // logs clean and respects the user's data budget on mobile.
-    try {
-      router.prefetch(`/asset/${id}`)
-    } catch {
-      /* prefetch is best-effort */
-    }
-  }
-
-  return { open, prefetch }
+  return { open, close, prefetch, currentId }
 }
