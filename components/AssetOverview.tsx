@@ -23,7 +23,7 @@
 import { useEffect, useState } from "react"
 import { LinkList } from "./LinkList"
 import { GeneratedBadge } from "./GeneratedBadge"
-import { ChipSkeleton, LinkRowSkeleton } from "./Shimmer"
+import { CategoryHeaderSkeleton, ChipSkeleton, LinkRowSkeleton } from "./Shimmer"
 import type { Link } from "@/types/asset"
 
 export interface AssetOverviewMarket {
@@ -288,34 +288,24 @@ function RetryButton({ coingeckoId }: { coingeckoId?: string | null }) {
   )
 }
 
-// Cold-load skeleton. Must mirror the structure of LinkList's eventual
-// render — real category headers + LinkRowSkeleton rows — so swapping
-// shimmer→real doesn't reflow. We use the two most-likely-first
-// categories ("Сайт" and "Соцсети"); if the real payload uses a
-// different ordering or labels, the heights still match (the section
-// header has a fixed visual weight regardless of label text width).
+// Cold-load skeleton uses neutral category headers because the actual
+// category metadata has not arrived yet.
 function BodySkeleton() {
+  const groups: Array<"Core" | "Trusted"> = ["Core", "Trusted", "Trusted", "Trusted"]
   return (
     <div className="space-y-6" aria-busy="true">
-      <section>
-        <div className="text-xs uppercase tracking-wide text-[var(--text-mut)] mb-2">
-          Сайт
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <LinkRowSkeleton tier="Core" id="skel:cold:site:0" />
-          <LinkRowSkeleton tier="Trusted" id="skel:cold:site:1" />
-        </div>
-      </section>
-      <section>
-        <div className="text-xs uppercase tracking-wide text-[var(--text-mut)] mb-2">
-          Соцсети
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <LinkRowSkeleton tier="Trusted" id="skel:cold:social:0" />
-          <LinkRowSkeleton tier="Trusted" id="skel:cold:social:1" />
-          <LinkRowSkeleton tier="Trusted" id="skel:cold:social:2" />
-        </div>
-      </section>
+      {groups.map((tier, groupIndex) => (
+        <section key={groupIndex}>
+          <div className="text-xs uppercase tracking-wide mb-2">
+            <CategoryHeaderSkeleton />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Array.from({ length: groupIndex === 0 ? 2 : 3 }).map((_, itemIndex) => (
+              <LinkRowSkeleton key={itemIndex} tier={tier} id={`skel:cold:${groupIndex}:${itemIndex}`} />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   )
 }

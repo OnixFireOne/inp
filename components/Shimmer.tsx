@@ -35,23 +35,24 @@ interface LinkRowSkeletonProps {
 }
 
 /** A single skeleton row matching the height of LinkIconBtn. */
-export function LinkRowSkeleton(_props: LinkRowSkeletonProps) {
+export function LinkRowSkeleton({ tier = "Trusted" }: LinkRowSkeletonProps) {
+  // LinkIconBtn adds 8px padding around a 28px Core or 20px Trusted icon.
+  // Keep its border, surface, and 10px radius exactly.
+  const sizeClass = tier === "Core" ? "w-11 h-11" : "w-9 h-9"
   return (
     <span
       aria-hidden="true"
-      className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-white/[0.06] motion-safe:animate-pulse"
+      className={`inline-flex items-center justify-center ${sizeClass} rounded-[10px] border border-[var(--border)] bg-[var(--surface-2)] motion-safe:animate-pulse`}
     />
   )
 }
 
-/** Header-row skeleton for category labels (reserved for very-first load
- *  before category metadata arrives). Rarely used because category labels
- *  are static data — kept here for completeness. */
+/** Header-row skeleton matching the category-header line height. */
 export function CategoryHeaderSkeleton() {
   return (
     <span
       aria-hidden="true"
-      className="inline-block h-3 w-32 rounded bg-white/[0.06] motion-safe:animate-pulse"
+      className="inline-block h-3 w-24 rounded-md bg-white/[0.06] motion-safe:animate-pulse"
     />
   )
 }

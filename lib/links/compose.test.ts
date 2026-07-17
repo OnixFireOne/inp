@@ -49,7 +49,7 @@ describe("composeLinksPayload", () => {
       assetId: "bitcoin",
       curated: [curated],
       categories: [],
-      templates,
+      templates: [providerHomepage],
       assetVars: { coingecko_id: "bitcoin", ticker: "BTC" },
       metaByProvider: {},
     })
@@ -57,6 +57,21 @@ describe("composeLinksPayload", () => {
     expect(out.generated).toBe(false)
     expect(out.status).toBe("described")
     expect(out.partial).toBeUndefined()
+    expect(out.pending).toBeUndefined()
+  })
+
+  it("does not probe pending templates for a described asset without curated links", () => {
+    const out = composeLinksPayload({
+      asset: { id: "bitcoin", name: "Bitcoin", ticker: "BTC", status: "described" },
+      assetId: "bitcoin",
+      curated: [],
+      categories: [],
+      templates: [providerHomepage],
+      assetVars: { coingecko_id: "bitcoin", ticker: "BTC" },
+      metaByProvider: {},
+    })
+    expect(out.partial).toBeUndefined()
+    expect(out.pending).toBeUndefined()
   })
 
   it("generates virtual links when curated list is empty", () => {

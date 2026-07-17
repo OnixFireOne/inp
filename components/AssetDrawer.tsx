@@ -105,6 +105,7 @@ function DrawerBody({ open, coingeckoId, market, onClose }: BodyProps) {
   // useQuery re-renders with the full payload. Shimmer slots (driven
   // by `pending`) collapse naturally because the render path is
   // identical for both shapes — only the link array changes.
+  const upgradeStartedRef = useRef<string | null>(null)
   const triggerFullFetch = (id: string) => {
     const ac = new AbortController()
     fetchLinksPayload(id, { signal: ac.signal })
@@ -113,22 +114,29 @@ function DrawerBody({ open, coingeckoId, market, onClose }: BodyProps) {
         qc.setQueryData<LinksPayload>(linksQueryKey(id), full)
       })
       .catch(() => {
-        // Leave the partial in place — AssetOverview's Retry button
-        // dispatches `asset-drawer-retry` to re-trigger this fetch.
+        // Allow the next open (or Retry) to try again after a failed upgrade.
+        if (!ac.signal.aborted && upgradeStartedRef.current === id) {
+          upgradeStartedRef.current = null
+        }
       })
     return () => ac.abort()
   }
 
-  const upgradeStartedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!enabled || !coingeckoId) return
-    const current = qc.getQueryData<LinksPayload>(linksQueryKey(coingeckoId))
-    if (!current) return // useQuery's own queryFn will run for first paint
-    if (!current.partial) return // already full — no upgrade needed
+    if (!enabled || !coingeckoId || !data?.partial) return
     if (upgradeStartedRef.current === coingeckoId) return
     upgradeStartedRef.current = coingeckoId
     return triggerFullFetch(coingeckoId)
-  }, [enabled, coingeckoId, qc])
+  }, [enabled, coingeckoId, data?.partial])
+
+  useEffect(() => {
+    if (!open || !data || data.partial) return
+    upgradeStartedRef.current = null
+  }, [open, data])
+
+  useEffect(() => {
+    if (!open) upgradeStartedRef.current = null
+  }, [open])
 
   // Retry handler — fired by the AssetOverview "Retry" button after the
   // partial upgrade has been failing for >8s. We re-fire the full fetch

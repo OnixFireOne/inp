@@ -18,7 +18,7 @@
 
 import type { Link } from "@/types/asset"
 import { LinkIconBtn } from "./LinkIconBtn"
-import { LinkRowSkeleton } from "./Shimmer"
+import { CategoryHeaderSkeleton, LinkRowSkeleton } from "./Shimmer"
 
 interface CategoryMeta {
   key: string
@@ -105,16 +105,19 @@ export function LinkList({
         const realItems = realByCategory.get(category) ?? []
         const shimmerCount = pendingByCategory.get(category) ?? 0
         if (realItems.length === 0 && shimmerCount === 0) return null
-        const label = labelMap.get(category) ?? category
+        const label = labelMap.get(category)
         const icon = iconMap.get(category) ?? null
-        const isUnknown = !labelMap.has(category)
+        const isUnknown = !label
+        const isPendingOnly = realItems.length === 0
         return (
           <section key={category}>
             <div className="text-xs uppercase tracking-wide text-[var(--text-mut)] mb-2 flex items-center gap-2">
-              <span>
-                {icon ? `${icon} ` : ""}{label}
-              </span>
-              {isUnknown && showUnknownBadge && (
+              {isUnknown && isPendingOnly ? (
+                <CategoryHeaderSkeleton />
+              ) : (
+                <span>{icon ? `${icon} ` : ""}{label ?? category}</span>
+              )}
+              {isUnknown && !isPendingOnly && showUnknownBadge && (
                 <span className="text-[10px] normal-case text-amber-600 border border-amber-300 rounded px-1">
                   нет в link_categories
                 </span>
@@ -143,17 +146,12 @@ export function LinkList({
           </section>
         )
       })}
-      {/* Provider-pending slots whose category isn't in pending (provider
-          templates use defaultCategory from the registry, which may not
-          appear in `pending` because the count is unknown). Render a
-          small generic shimmer group at the bottom so the user sees
-          activity while the upgrade fetch is in flight. We avoid
-          inventing a category label — these shimmers sit in their own
-          anonymous block that disappears once the full payload arrives. */}
+      {/* Provider-pending slots whose category isn't in pending. Keep the
+          anonymous header visual rather than exposing a synthetic label. */}
       {hasContractPending && (
         <section key="pending:provider" aria-hidden="true">
-          <div className="text-xs uppercase tracking-wide text-transparent select-none mb-2">
-            …
+          <div className="text-xs uppercase tracking-wide mb-2">
+            <CategoryHeaderSkeleton />
           </div>
           <div className="flex flex-wrap gap-2">
             <LinkRowSkeleton key="pending:provider:0" tier="Trusted" />

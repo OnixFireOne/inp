@@ -84,6 +84,15 @@ export function composeLinksPayload<TCategory>(args: {
     status,
   }
 
+  // Pending templates only matter on the generated-link path for assets
+  // eligible for metadata ensure. Curated and described assets never use
+  // those templates (and route.ts deliberately never ensures them), so
+  // probing them would create a permanent partial payload and needless
+  // drawer upgrades.
+  const canEnsureMeta =
+    (!args.asset || args.asset.status === "template") && !hasCurated
+  if (!canEnsureMeta) return result
+
   // Single source of truth for "is this payload partial?" — the same
   // probe used by expandTemplates (via tryResolveTemplate). If something
   // would render once meta arrives, we mark the payload partial so the
