@@ -95,9 +95,25 @@ async function doEnsure(cg: string, force: boolean): Promise<EnsureResult> {
     if (fresh) return { status: "fresh" }
   }
 
-  // 4. Single-flight lock.
+  // 4. Single-flight lock. If the lock is busy AND we were called with
+  // `wait: true` (the storefront inline path), poll the DB for the snapshot
+  // the in-flight caller is producing rather than giving up immediately.
+  // Without this, two concurrent cold clicks on the same coin would race:
+  // the second caller would see status="skipped" while the snapshot was
+  // still being upserted by the first, and would return a degraded payload
+  // until the user manually retried.
   const got = await kvSetNx(lockKey(cg), LOCK_TTL, "1")
-  if (!got) return { status: "skipped" }
+  if (!got) {
+    if (force) {
+      // Materialize path uses force=true to acquire the lock unconditionally.
+      // If we lost the race anyway, fall through to the wait path below.
+    }
+    // Inline wait path (wait=true, !force or no other option): poll for
+    // a snapshot up to ENSURE_INLINE_TIMEOUT_MS. The fetchLinkRoute's
+    // inline timeout drives the outer race; we still bound ourselves here
+    // so a misconfigured caller can't hang forever.
+    return await waitForSnapshotUnderLock(cg, supabase)
+  }
 
   try {
     // 5. Rate budget.
@@ -161,6 +177,30 @@ async function doEnsure(cg: string, force: boolean): Promise<EnsureResult> {
 }
 
 type Supabase = Awaited<ReturnType<typeof supabaseServer>>
+
+// Poll `asset_meta` for a freshly-upserted snapshot while another caller
+// holds the single-flight lock. Returns "fetched" once a snapshot lands
+// (so the caller treats it like its own success), or "skipped" if the
+// timeout elapses with nothing new.
+async function waitForSnapshotUnderLock(
+  cg: string,
+  supabase: Supabase,
+): Promise<EnsureResult> {
+  // Bound by the route's ENSURE_INLINE_TIMEOUT_MS; if the snapshot does
+  // appear mid-wait we return early. Matches the inline-wait contract:
+  // "the call returns when the DB has fresh data OR the deadline passes".
+  const deadline = Date.now() + 4000
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 300))
+    try {
+      const fresh = await readFreshSnapshot(supabase, cg)
+      if (fresh) return { status: "fetched", data: null }
+    } catch {
+      // keep polling; transient errors don't abort the wait
+    }
+  }
+  return { status: "skipped" }
+}
 
 async function readFreshSnapshot(
   supabase: Supabase,

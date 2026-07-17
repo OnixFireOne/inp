@@ -37,11 +37,20 @@ vi.mock("../kv", () => {
 })
 
 // supabase stub. We only model the two tables ensureAssetMeta touches.
-const selectResponses: Array<{ match: (sql: string) => boolean; value: any }> =
-  []
+// The select responses can come from either a queued list (drained in
+// order) or a dynamic provider function (called per request) — useful
+// when a test wants to switch the answer mid-flight (e.g. polling for a
+// snapshot that another caller is still upserting).
+type SelectResponse = { match?: (sql: string) => boolean; value: any }
+type SelectProvider = () => any
+const selectResponses: SelectResponse[] = []
+let selectProvider: SelectProvider | null = null
 const upsertCalls: Array<{ table: string; values: unknown }> = []
 function queueSelect(value: any, match = () => true) {
   selectResponses.push({ match, value })
+}
+function setSelectProvider(fn: SelectProvider | null) {
+  selectProvider = fn
 }
 function drainSelects() {
   return selectResponses.splice(0, selectResponses.length)
@@ -53,8 +62,11 @@ const supabaseMock = {
       eq: (_col: string, _val: string) => ({
         eq: (_col2: string, _val2: string) => ({
           maybeSingle: async () => {
+            if (selectProvider) {
+              return { data: selectProvider(), error: null }
+            }
             const q = drainSelects()
-            const hit = q.find((r) => r.match(table))
+            const hit = q.find((r) => r.match!(table))
             return { data: hit ? hit.value : null, error: null }
           },
         }),
@@ -105,6 +117,7 @@ const RAW = { links: { homepage: ["https://bitcoin.org"] } }
 beforeEach(() => {
   upsertCalls.length = 0
   drainSelects()
+  selectProvider = null
   allowlistMocks.allowed = true
   allowlistMocks.warmCalls = 0
   allowlistMocks.warmResult = null
@@ -246,9 +259,21 @@ describe("ensureAssetMeta", () => {
     expect(upsertCalls.length).toBeGreaterThanOrEqual(2)
   })
 
-  it("single-flight: second caller inside the lock window gets 'skipped'", async () => {
-    queueSelect(null) // first freshness check
-    // Simulate a long fetch by holding the response.
+  it("single-flight: second caller inside the lock window WAITS for the first to finish", async () => {
+    // Two callers racing on the same cold coin must NOT both end up with a
+    // stale/empty payload. The second caller polls the DB and observes the
+    // snapshot that the first caller is upserting, then returns "fetched"
+    // (no fresh data, but the inline caller will re-read meta anyway and
+    // find it present — that's the route's job, not ours).
+    let snapshotUpserted = false
+    setSelectProvider(() => {
+      // While the first caller is still in flight we report "not fresh";
+      // once its upsert lands, every subsequent poll sees a fresh row.
+      if (!snapshotUpserted) return null
+      return { fetched_at: new Date(Date.now() - 1000).toISOString() }
+    })
+    upsertCalls.length = 0
+
     let release: (v: Response) => void = () => {}
     const pending = new Promise<Response>((res) => {
       release = res
@@ -257,13 +282,47 @@ describe("ensureAssetMeta", () => {
 
     const a = ensureAssetMeta("bitcoin", { wait: true })
     // While a is awaiting the fetch, kick off a second call.
-    const b = await ensureAssetMeta("bitcoin", { wait: true })
-    expect(b.status).toBe("skipped")
+    const b = ensureAssetMeta("bitcoin", { wait: true })
 
-    // Release the first call and confirm it completes successfully.
+    // Give b a tick to enter waitForSnapshotUnderLock.
+    await new Promise((r) => setTimeout(r, 50))
+
+    // Release the first call so it upserts and frees the lock.
     release(new Response(JSON.stringify(RAW), { status: 200 }))
     const out = await a
+    // Mark the snapshot as upserted AFTER a finishes, mirroring production
+    // timing (the upsert inside doEnsure writes before kvDel frees the lock).
+    snapshotUpserted = true
     expect(out.status).toBe("fetched")
+
+    // b should observe the now-fresh snapshot via the polling path.
+    const outB = await b
+    expect(outB.status).toBe("fetched")
+
+    setSelectProvider(null)
+  })
+
+  it("single-flight: second caller times out and reports 'skipped' when lock holder never produces a snapshot", async () => {
+    // Edge case: lock holder fails before upserting. The waiter must NOT
+    // hang — it returns 'skipped' after its internal deadline, and the
+    // route's outer timeout (ENSURE_INLINE_TIMEOUT_MS) bounds the user-
+    // facing wait further.
+    setSelectProvider(() => null)
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("server down", { status: 500 })),
+    )
+
+    const a = ensureAssetMeta("bitcoin", { wait: true })
+    const b = ensureAssetMeta("bitcoin", { wait: true })
+
+    const [outA, outB] = await Promise.all([a, b])
+    // The first caller hits fetch failure and treats it as rate_limited
+    // (existing behaviour). The second waiter times out → 'skipped'.
+    expect(outA.status).toBe("rate_limited")
+    expect(outB.status).toBe("skipped")
+
+    setSelectProvider(null)
   })
 
   it("uses the env-derived TTL/limits", () => {
