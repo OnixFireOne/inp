@@ -8,17 +8,22 @@
 // Drawer-only chrome (drag handle, close button) is rendered only when
 // variant="drawer". In "page" mode the parent page supplies its own header.
 //
-// OPEN PERFORMANCE:
-//   The header (name, symbol, icon, price, %24h, market cap) renders from
-//   the `market` prop synchronously. The drawer is INSTANTLY populated —
-//   the network fetch for /api/links only fills the LinkList area below.
-//   `isLoading` (true only when there's no cached links payload yet) is
-//   scoped to the body, so even during a cold first fetch the user sees
-//   real data up top, not a generic skeleton.
+// PARTIAL PAYLOAD HANDLING (drawer only):
+//   When the cache holds a `partial: true` payload (cold coin the user
+//   only hovered, never clicked), we forward `pending` + `hasContractPending`
+//   to <LinkList> + the contract-chip slot. LinkList reserves shimmer rows
+//   per pending category, and the contract chip slot becomes a shimmer
+//   pill of the same height. The drawer also fires the full /api/links
+//   request in the background (see AssetDrawer); when the full payload
+//   arrives, setQueryData swaps the cache under the same key, RQ re-renders,
+//   shimmers disappear, real links appear in their place — no layout shift
+//   because the reservations matched the eventual real count or collapsed
+//   cleanly when the real count was lower.
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { LinkList } from "./LinkList"
 import { GeneratedBadge } from "./GeneratedBadge"
+import { ChipSkeleton, LinkRowSkeleton } from "./Shimmer"
 import type { Link } from "@/types/asset"
 
 export interface AssetOverviewMarket {
@@ -58,6 +63,14 @@ interface AssetOverviewProps {
   contract?: { chain: string; address: string } | null
   /** True ONLY when we have no cached links AND a fetch is in flight. */
   isLoading?: boolean
+  /** Partial-payload shape from the prefetch path. */
+  partial?: boolean
+  pending?: { categoryKey: string; count: number }[]
+  hasProviderPending?: boolean
+  hasContractPending?: boolean
+  /** CoinGecko id — needed so the retry button (see below) can fire a fresh
+   *  full /api/links on demand. */
+  coingeckoId?: string | null
   variant: "drawer" | "page"
   onClose?: () => void
 }
@@ -107,12 +120,39 @@ export function AssetOverview({
   status,
   contract,
   isLoading = false,
+  partial = false,
+  pending,
+  hasContractPending,
+  coingeckoId,
   variant,
   onClose,
 }: AssetOverviewProps) {
   const displayName = asset?.name ?? market?.name ?? ""
   const displaySymbol = asset?.ticker ?? market?.symbol ?? ""
   const icon = asset?.icon ?? market?.image ?? ""
+
+  // The contract chip slot is reserved whenever we either already have a
+  // contract (real) or are still waiting on meta (shimmer). On a cold
+  // load (`isLoading`, no cache yet) we don't yet know whether the
+  // snapshot has a contract — so we reserve the slot too, otherwise the
+  // chip would pop in once the payload arrives and shift the body down.
+  // Both branches share the exact same row in the JSX so the layout
+  // never shifts when a partial payload upgrades to full.
+  const contractSlotOccupied = !!contract
+  const contractSlotPending = !contract && (!!hasContractPending || isLoading)
+
+  // Anti-flicker delay for the body skeleton: if the cached payload
+  // resolves in <150ms, we don't paint shimmer at all. The spec asks for
+  // a 150–200ms gate.
+  const [showBodySkeleton, setShowBodySkeleton] = useState(isLoading)
+  useEffect(() => {
+    if (!isLoading) {
+      setShowBodySkeleton(false)
+      return
+    }
+    const t = setTimeout(() => setShowBodySkeleton(true), 180)
+    return () => clearTimeout(t)
+  }, [isLoading])
 
   return (
     <>
@@ -165,21 +205,40 @@ export function AssetOverview({
         </div>
       )}
 
-      {/* Copy contract chip (drawer only) — for mem traders. Hidden on
-          page variant: the page already shows the contract in its own block. */}
-      {variant === "drawer" && contract && (
-        <CopyContractChip chain={contract.chain} address={contract.address} />
+      {/* Contract slot — fixed height row so the header doesn't shift when
+          the chip swaps between real/shimmer/none. */}
+      {variant === "drawer" && (contractSlotOccupied || contractSlotPending) && (
+        <div className="px-5 pt-3 pb-1 shrink-0 min-h-[40px] flex items-center">
+          {contractSlotOccupied ? (
+            <CopyContractChip chain={contract!.chain} address={contract!.address} />
+          ) : (
+            <ChipSkeleton />
+          )}
+        </div>
       )}
 
       {/* Body — LinkList area. Skeleton only here. */}
       <div className={variant === "drawer" ? "drawer-body flex-1 min-h-0" : ""}>
         <div className={variant === "drawer" ? "drawer-scroll p-5" : "p-6"}>
-          {isLoading ? (
-            <Skeleton />
-          ) : links.length === 0 ? (
+          {showBodySkeleton ? (
+            <BodySkeleton />
+          ) : links.length === 0 && (!pending || pending.length === 0) ? (
             <EmptyState />
           ) : (
-            <LinkList links={links} categories={categories} />
+            <LinkList
+              links={links}
+              categories={categories}
+              pending={pending}
+              hasContractPending={hasContractPending}
+              coingeckoId={coingeckoId}
+            />
+          )}
+          {/* Partial state footer: visible only while we're waiting for the
+              full payload. The Retry button is the timeout/error fallback —
+              AssetDrawer fires the full fetch in the background, so this
+              only appears if that fetch has been failing for >8s. */}
+          {partial && links.length > 0 && (
+            <PartialFooter coingeckoId={coingeckoId} />
           )}
         </div>
       </div>
@@ -187,16 +246,76 @@ export function AssetOverview({
   )
 }
 
-function Skeleton() {
+// Compact footer that surfaces a Retry if the upgrade fetch takes too long
+// or has failed. Mounts only on the partial state (prefetch-shaped cache).
+function PartialFooter({ coingeckoId }: { coingeckoId?: string | null }) {
+  const [showRetry, setShowRetry] = useState(false)
+
+  useEffect(() => {
+    const t = setTimeout(() => setShowRetry(true), 8000)
+    return () => clearTimeout(t)
+  }, [])
+
+  if (!showRetry) {
+    return (
+      <div className="mt-4 text-[11px] text-[var(--text-mut)]">
+        Подгружаем дополнительные ссылки…
+      </div>
+    )
+  }
+
   return (
-    <div className="space-y-3">
-      <div className="h-4 w-40 bg-[var(--surface-2)] rounded animate-pulse" />
-      <div className="h-3 w-24 bg-[var(--surface-2)] rounded animate-pulse" />
-      <div className="h-3 w-32 bg-[var(--surface-2)] rounded animate-pulse" />
-      <div className="h-px bg-[var(--border)] my-4" />
-      {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="h-10 bg-[var(--surface-2)] rounded animate-pulse" />
-      ))}
+    <div className="mt-4 text-xs text-[var(--text-mut)] flex items-center gap-3">
+      <span>Не удалось догрузить ссылки на блокчейн.</span>
+      <RetryButton coingeckoId={coingeckoId} />
+    </div>
+  )
+}
+
+function RetryButton({ coingeckoId }: { coingeckoId?: string | null }) {
+  if (!coingeckoId) return null
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        // Window event — AssetDrawer listens and forces a fresh full fetch.
+        window.dispatchEvent(new CustomEvent("asset-drawer-retry", { detail: { id: coingeckoId } }))
+      }}
+      className="rounded border border-[var(--border)] px-2 py-1 text-[11px] hover:bg-[var(--surface-2)]"
+    >
+      Retry
+    </button>
+  )
+}
+
+// Cold-load skeleton. Must mirror the structure of LinkList's eventual
+// render — real category headers + LinkRowSkeleton rows — so swapping
+// shimmer→real doesn't reflow. We use the two most-likely-first
+// categories ("Сайт" and "Соцсети"); if the real payload uses a
+// different ordering or labels, the heights still match (the section
+// header has a fixed visual weight regardless of label text width).
+function BodySkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true">
+      <section>
+        <div className="text-xs uppercase tracking-wide text-[var(--text-mut)] mb-2">
+          Сайт
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <LinkRowSkeleton tier="Core" id="skel:cold:site:0" />
+          <LinkRowSkeleton tier="Trusted" id="skel:cold:site:1" />
+        </div>
+      </section>
+      <section>
+        <div className="text-xs uppercase tracking-wide text-[var(--text-mut)] mb-2">
+          Соцсети
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <LinkRowSkeleton tier="Trusted" id="skel:cold:social:0" />
+          <LinkRowSkeleton tier="Trusted" id="skel:cold:social:1" />
+          <LinkRowSkeleton tier="Trusted" id="skel:cold:social:2" />
+        </div>
+      </section>
     </div>
   )
 }
@@ -245,22 +364,20 @@ function CopyContractChip({ chain, address }: { chain: string; address: string }
   }
 
   return (
-    <div className="px-5 pt-3 pb-1 shrink-0">
-      <button
-        type="button"
-        onClick={onCopy}
-        title={`${chain}: ${address}`}
-        aria-label={`Скопировать контракт ${address}`}
-        className="inline-flex items-center gap-2 max-w-full rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs hover:bg-[var(--surface)] cursor-pointer"
-      >
-        <span className="text-[10px] uppercase tracking-wide text-[var(--text-mut)]">
-          CA · {chain}
-        </span>
-        <span className="font-mono text-[var(--text)] truncate">{short}</span>
-        <span aria-hidden className="text-[var(--text-mut)]">
-          {state === "copied" ? "✓" : "⧉"}
-        </span>
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={onCopy}
+      title={`${chain}: ${address}`}
+      aria-label={`Скопировать контракт ${address}`}
+      className="inline-flex items-center gap-2 max-w-full rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-xs hover:bg-[var(--surface)] cursor-pointer"
+    >
+      <span className="text-[10px] uppercase tracking-wide text-[var(--text-mut)]">
+        CA · {chain}
+      </span>
+      <span className="font-mono text-[var(--text)] truncate">{short}</span>
+      <span aria-hidden className="text-[var(--text-mut)]">
+        {state === "copied" ? "✓" : "⧉"}
+      </span>
+    </button>
   )
 }

@@ -26,6 +26,16 @@ export interface LinksPayload {
   status?: "described" | "template" | "undescribed"
   /** Native-chain contract address from the CG snapshot, plus its chain key. */
   contract?: { chain: string; address: string } | null
+  /** True only on the prefetch path when meta is missing. The client
+   *  renders partial links + shimmer reservations and triggers a full
+   *  /api/links in the background to upgrade the payload. */
+  partial?: boolean
+  /** Per-category reserved shimmer slot counts. */
+  pending?: { categoryKey: string; count: number }[]
+  /** True if at least one kind=provider template is pending on meta. */
+  hasProviderPending?: boolean
+  /** True if any {contract} pattern template is pending on meta. */
+  hasContractPending?: boolean
 }
 
 export const linksQueryKey = (coingeckoId: string) => ["links", coingeckoId] as const
@@ -44,9 +54,20 @@ const MARKET_ROW_STALE_MS = 60 * 1000 // 60s
 
 const HOVER_DEBOUNCE_MS = 150
 
-export async function fetchLinksPayload(cg: string, signal?: AbortSignal): Promise<LinksPayload> {
-  const r = await fetch(`/api/links?cg=${encodeURIComponent(cg)}`, { signal })
-  if (!r.ok) return { asset: null, links: [], categories: [] }
+/**
+ * Fetch /api/links. `prefetch=true` switches the route to the no-ensure
+ * path: it does NOT touch CoinGecko (no quota burnt on hovers that may
+ * never become clicks), and the response carries `partial=true` on cold
+ * coins so the client can reserve shimmer slots and trigger a full fetch
+ * in the background.
+ */
+export async function fetchLinksPayload(
+  cg: string,
+  opts: { signal?: AbortSignal; prefetch?: boolean } = {},
+): Promise<LinksPayload> {
+  const url = `/api/links?cg=${encodeURIComponent(cg)}${opts.prefetch ? "&prefetch=1" : ""}`
+  const r = await fetch(url, { signal: opts.signal })
+  if (!r.ok) return { asset: null, links: [], categories: [], partial: true }
   return (await r.json()) as LinksPayload
 }
 
@@ -54,7 +75,7 @@ export function prefetchLinks(qc: QueryClient, coingeckoId: string) {
   if (typeof window === "undefined") return
   void qc.prefetchQuery({
     queryKey: linksQueryKey(coingeckoId),
-    queryFn: ({ signal }) => fetchLinksPayload(coingeckoId, signal),
+    queryFn: ({ signal }) => fetchLinksPayload(coingeckoId, { signal, prefetch: true }),
     staleTime: LINKS_STALE_MS,
     gcTime: LINKS_GC_MS,
   })

@@ -1,5 +1,24 @@
+// components/LinkList.tsx
+// Renders the link grid (Core + Trusted chips) for an asset, grouped by
+// category and sorted by `link_categories.sort`.
+//
+// PARTIAL-PAYLOAD EXTENSION (drawer path only):
+//   When given a `pending: [{categoryKey, count}]` array (prefetch path),
+//   we render the pending categories as normal sections — real label + real
+//   sort order — but with `count` shimmer rows in place of the eventual
+//   real links. Once the full payload swaps in, the real links use the
+//   SAME stable React key as the shimmers (we mirror the prefix
+//   `pending:<categoryKey>:<index>` → real key `tpl:<templateId>`), so the
+//   reconciliation swaps row-for-row without re-mounting anything else.
+//
+//   hasContractPending drives a single extra shimmer in the matching
+//   default category (provided by SOURCE_REGISTRY.defaultCategory for the
+//   provider templates) — that's where the eventual {contract} link will
+//   land.
+
 import type { Link } from "@/types/asset"
 import { LinkIconBtn } from "./LinkIconBtn"
+import { LinkRowSkeleton } from "./Shimmer"
 
 interface CategoryMeta {
   key: string
@@ -8,93 +27,84 @@ interface CategoryMeta {
   sort: number
 }
 
-// Stable fallback sort for categories that exist on links but aren't in the
-// link_categories table (data drift). Pushes them to the end with a stable
-// alpha tiebreaker — no "alphabet soup" mixed into the main ordering.
 const UNKNOWN_SORT = 9999
 
 interface LinkListProps {
   links: Link[]
   categories?: CategoryMeta[]
-  /**
-   * When true, render a debug badge on category headers whose key isn't
-   * in the link_categories table. Public showcase should keep this OFF —
-   * it's an internal data-drift marker for editors.
-   */
+  /** Per-category shimmer reservations (prefetch path). */
+  pending?: { categoryKey: string; count: number }[]
+  /** Render a single extra shimmer in the matching default category for
+   *  any provider-pending slots (twitter/telegram/etc. — count unknown). */
+  hasContractPending?: boolean
+  /** Coingecko id of the asset — passed through for any future telemetry
+   *  hooks. Currently unused inside LinkList itself. */
+  coingeckoId?: string | null
   showUnknownBadge?: boolean
 }
 
-// Group by category. "Core" tier = Top links card (now ordered/grouped by
-// the same effective category sort as Trusted).
-// Trusted links = chip grid.
-// Visible: icon only. Name + description shown on hover (custom tooltip span).
-export function LinkList({ links, categories, showUnknownBadge = false }: LinkListProps) {
-  const core = links.filter((l) => l.tier === "Core")
-  const trusted = links.filter((l) => l.tier === "Trusted")
+export function LinkList({
+  links,
+  categories,
+  pending,
+  hasContractPending,
+  showUnknownBadge = false,
+}: LinkListProps) {
+  // Map category key → { real: Link[], shimmer: number }. The shimmer count
+  // comes from `pending`; the real links come from `links`. They share
+  // space inside the same <section> so the upgrade swap is row-for-row.
+  const realByCategory = new Map<string, Link[]>()
+  for (const l of links) {
+    const k = l.category || "Other"
+    if (!realByCategory.has(k)) realByCategory.set(k, [])
+    realByCategory.get(k)!.push(l)
+  }
 
-  // Sort: explicit category order (from link_categories.sort) first,
-  // unknown categories pushed to the end with a stable alpha tiebreaker.
+  const pendingByCategory = new Map<string, number>()
+  if (pending) {
+    for (const p of pending) {
+      pendingByCategory.set(p.categoryKey, (pendingByCategory.get(p.categoryKey) ?? 0) + p.count)
+    }
+  }
+
   const sortMap = new Map<string, number>()
-  if (categories) {
-    for (const c of categories) sortMap.set(c.key, c.sort)
-  }
   const labelMap = new Map<string, string>()
-  if (categories) {
-    for (const c of categories) labelMap.set(c.key, c.label)
-  }
   const iconMap = new Map<string, string | null>()
   if (categories) {
-    for (const c of categories) iconMap.set(c.key, c.icon)
+    for (const c of categories) {
+      sortMap.set(c.key, c.sort)
+      labelMap.set(c.key, c.label)
+      iconMap.set(c.key, c.icon)
+    }
   }
 
-  // Effective sort for any category key — known → its sort, unknown → UNKNOWN_SORT.
   function effectiveSort(key: string): number {
     return sortMap.get(key) ?? UNKNOWN_SORT
   }
 
-  // Group Trusted links by category.
-  const trustedByCategory = new Map<string, Link[]>()
-  for (const l of trusted) {
-    const k = l.category || "Other"
-    if (!trustedByCategory.has(k)) trustedByCategory.set(k, [])
-    trustedByCategory.get(k)!.push(l)
-  }
-
-  // Group Core links by category so the Top-links block can be ordered by the
-  // same effective category order (per the decision in plan/admin-categ.md §8).
-  const coreByCategory = new Map<string, Link[]>()
-  for (const l of core) {
-    const k = l.category || "Other"
-    if (!coreByCategory.has(k)) coreByCategory.set(k, [])
-    coreByCategory.get(k)!.push(l)
-  }
-
-  // Union of category keys that actually have links (Trusted or Core).
-  const allKeys = new Set<string>([...trustedByCategory.keys(), ...coreByCategory.keys()])
+  // Union of all category keys we have to render.
+  const allKeys = new Set<string>([
+    ...realByCategory.keys(),
+    ...pendingByCategory.keys(),
+  ])
 
   const orderedKeys = Array.from(allKeys).sort((a, b) => {
     const sa = effectiveSort(a)
     const sb = effectiveSort(b)
     if (sa !== sb) return sa - sb
-    // Stable alpha tiebreaker for both known and unknown groups.
     return a.localeCompare(b)
   })
 
-  // Suppress the per-chip "generated" marker when every chip on this page is
-  // virtual — the header badge already conveys the state (TЗ §8.3).
   const allGenerated = links.length > 0 && links.every((l) => l.generated === true)
 
-  // Within a category, Core and Trusted each keep their incoming order
-  // (DB already orders by is_top / manual_rank / ai_score). If you ever need
-  // extra sort here, do it inside the per-key section below.
-  if (links.length === 0) return null
+  if (allKeys.size === 0) return null
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" aria-busy={pending && pending.length > 0 ? "true" : undefined}>
       {orderedKeys.map((category) => {
-        const coreItems = coreByCategory.get(category) ?? []
-        const trustedItems = trustedByCategory.get(category) ?? []
-        if (coreItems.length === 0 && trustedItems.length === 0) return null
+        const realItems = realByCategory.get(category) ?? []
+        const shimmerCount = pendingByCategory.get(category) ?? 0
+        if (realItems.length === 0 && shimmerCount === 0) return null
         const label = labelMap.get(category) ?? category
         const icon = iconMap.get(category) ?? null
         const isUnknown = !labelMap.has(category)
@@ -111,7 +121,7 @@ export function LinkList({ links, categories, showUnknownBadge = false }: LinkLi
               )}
             </div>
             <div className="flex flex-wrap gap-2">
-              {[...coreItems, ...trustedItems].map((link) => (
+              {realItems.map((link) => (
                 <LinkIconBtn
                   key={link.id}
                   href={link.href}
@@ -122,10 +132,35 @@ export function LinkList({ links, categories, showUnknownBadge = false }: LinkLi
                   generated={!allGenerated && link.generated === true}
                 />
               ))}
+              {Array.from({ length: shimmerCount }).map((_, i) => (
+                // Stable key per slot — independent of any array order on
+                // the server. When the full payload arrives the real
+                // link with id `tpl:<templateId>` mounts at this exact
+                // DOM position; React reconciles by key, so no shift.
+                <LinkRowSkeleton key={`pending:${category}:${i}`} tier={i === 0 ? "Core" : "Trusted"} />
+              ))}
             </div>
           </section>
         )
       })}
+      {/* Provider-pending slots whose category isn't in pending (provider
+          templates use defaultCategory from the registry, which may not
+          appear in `pending` because the count is unknown). Render a
+          small generic shimmer group at the bottom so the user sees
+          activity while the upgrade fetch is in flight. We avoid
+          inventing a category label — these shimmers sit in their own
+          anonymous block that disappears once the full payload arrives. */}
+      {hasContractPending && (
+        <section key="pending:provider" aria-hidden="true">
+          <div className="text-xs uppercase tracking-wide text-transparent select-none mb-2">
+            …
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <LinkRowSkeleton key="pending:provider:0" tier="Trusted" />
+            <LinkRowSkeleton key="pending:provider:1" tier="Trusted" />
+          </div>
+        </section>
+      )}
     </div>
   )
 }

@@ -53,7 +53,7 @@ export function AssetRow({
       try {
         const data = await qc.fetchQuery({
           queryKey: linksQueryKey(row.id),
-          queryFn: ({ signal }) => fetchLinksPayload(row.id, signal),
+          queryFn: ({ signal }) => fetchLinksPayload(row.id, { signal }),
           // links are admin-curated — same freshness policy as the drawer
           staleTime: LINKS_STALE_MS,
           gcTime: LINKS_GC_MS,

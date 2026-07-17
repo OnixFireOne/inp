@@ -3,31 +3,37 @@
 // Drawer: Vaul bottom-sheet on mobile (<md), Radix side-panel on desktop.
 // Reads the SAME ["links", id] queryKey that AssetRow / HotCoinsBeeswarm
 // prefetched on hover (see lib/prefetch.ts). One cache, both surfaces, zero
-// extra network.
+// extra network on the warm path.
 //
 // OPEN POLICY (instant feel):
 //   The drawer is rendered by parent Radix/Vaul state — `open` triggers mount.
-//   Children MUST NOT block on the network: the header (name, symbol, icon,
-//   price, 24h%, market cap) is sourced from `market` prop which is always
-//   available (it's the MarketRow behind every tile). Only the LinkList area
-//   shows skeletons while /api/links is in flight. Even then, if the cache is
-//   hot (recently opened this coin), we render the cached list and update it
-//   silently when the refetch resolves.
+//   The header (name, symbol, icon, price, %24h, market cap) renders
+//   INSTANTLY from the `market` prop, never blocked on the network. The
+//   body shows whatever links the prefetch placed in cache; if that
+//   payload is `partial: true` (cold coin the user only hovered, never
+//   clicked), we render the partial links + per-category shimmer slots
+//   (see `pending`) and fire a FULL `/api/links` in the background —
+//   that one DOES hit CoinGecko (because the user committed). The full
+//   response overwrites the cache via setQueryData on the same queryKey,
+//   shimmer rows are replaced by real links in place.
 //
-// CACHE POLICY (links query only):
-//   - linksPayload (curated/template links + asset identity + contract):
-//     staleTime 12h, gcTime 24h — these are admin-curated and only change
-//     when the admin bumps the KV cache-version token. Repeat opens of the
-//     same coin are pure cache hits; no skeleton; no network.
-//   - Market price/%24h/marketCap are NOT refetched here — they come from
-//     the `market` prop (the MarketRow already on screen), refreshed by the
-//     /api/markets cadence. Adding a separate query would just round-trip
-//     data that's already 1 render old.
+// CACHE POLICY:
+//   - Links payload: staleTime 12h, gcTime 24h. Prefetch and click both
+//     share this cache. A payload carries `partial=true` whenever the
+//     probe classifies at least one enabled template as pending-meta —
+//     that's the case for *both* the prefetch path (ensure was never
+//     run on hover) AND the click path when ensure times out (5s inline).
+//     The drawer upgrades any `partial` payload in the background the
+//     next time that coin is opened — a click that degraded previously
+//     gets a second chance to land on a full payload, no stale 12h lock.
+//   - Market price/%24h/marketCap come from the `market` prop (the
+//     MarketRow already on screen), refreshed by /api/markets cadence —
+//     no separate query here.
 
 import * as Dialog from "@radix-ui/react-dialog"
 import { Drawer as VaulDrawer } from "vaul"
-import { useQuery } from "@tanstack/react-query"
-import { useSyncExternalStore } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useEffect, useRef, useSyncExternalStore } from "react"
 import { AssetOverview } from "./AssetOverview"
 import {
   fetchLinksPayload,
@@ -61,7 +67,7 @@ interface AssetDrawerProps {
 function useLinksPayload(coingeckoId: string | null, enabled: boolean) {
   return useQuery<LinksPayload>({
     queryKey: coingeckoId ? linksQueryKey(coingeckoId) : ["links", "_disabled"],
-    queryFn: ({ signal }) => fetchLinksPayload(coingeckoId as string, signal),
+    queryFn: ({ signal }) => fetchLinksPayload(coingeckoId as string, { signal }),
     enabled: enabled && !!coingeckoId,
     staleTime: LINKS_STALE_MS,
     gcTime: LINKS_GC_MS,
@@ -85,12 +91,63 @@ interface BodyProps {
 }
 
 function DrawerBody({ open, coingeckoId, market, onClose }: BodyProps) {
+  const qc = useQueryClient()
   const enabled = open && !!coingeckoId
   const { data, isFetching } = useLinksPayload(coingeckoId, enabled)
 
-  // Render cached body if available, even during background refetch — the
-  // big UX win: A → B → A returns instantly with zero skeleton because the
-  // payload is in RQ cache for 12h.
+  // The cache may hold a `partial` payload from either source:
+  //   - prefetch (no ensure run on hover)
+  //   - a previous click whose ensure timed out at 5s
+  // On the next open we fire the FULL /api/links in the background —
+  // this is the only call in the open path that touches CoinGecko, and
+  // the user has committed by re-opening. The full response overwrites
+  // the cache via setQueryData on the same queryKey; the drawer's
+  // useQuery re-renders with the full payload. Shimmer slots (driven
+  // by `pending`) collapse naturally because the render path is
+  // identical for both shapes — only the link array changes.
+  const triggerFullFetch = (id: string) => {
+    const ac = new AbortController()
+    fetchLinksPayload(id, { signal: ac.signal })
+      .then((full) => {
+        if (ac.signal.aborted) return
+        qc.setQueryData<LinksPayload>(linksQueryKey(id), full)
+      })
+      .catch(() => {
+        // Leave the partial in place — AssetOverview's Retry button
+        // dispatches `asset-drawer-retry` to re-trigger this fetch.
+      })
+    return () => ac.abort()
+  }
+
+  const upgradeStartedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!enabled || !coingeckoId) return
+    const current = qc.getQueryData<LinksPayload>(linksQueryKey(coingeckoId))
+    if (!current) return // useQuery's own queryFn will run for first paint
+    if (!current.partial) return // already full — no upgrade needed
+    if (upgradeStartedRef.current === coingeckoId) return
+    upgradeStartedRef.current = coingeckoId
+    return triggerFullFetch(coingeckoId)
+  }, [enabled, coingeckoId, qc])
+
+  // Retry handler — fired by the AssetOverview "Retry" button after the
+  // partial upgrade has been failing for >8s. We re-fire the full fetch
+  // unconditionally, regardless of whether the cache currently shows
+  // partial or full (the user is asking us to refresh).
+  useEffect(() => {
+    if (!coingeckoId) return
+    function onRetry(e: Event) {
+      const id = (e as CustomEvent<{ id: string }>).detail?.id
+      if (id !== coingeckoId) return
+      triggerFullFetch(coingeckoId!)
+    }
+    window.addEventListener("asset-drawer-retry", onRetry)
+    return () => window.removeEventListener("asset-drawer-retry", onRetry)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coingeckoId])
+
+  // Full-payload swap done by setQueryData above; the useQuery above
+  // re-renders automatically.
   const showBodySkeleton = !data && isFetching
 
   return (
@@ -101,6 +158,11 @@ function DrawerBody({ open, coingeckoId, market, onClose }: BodyProps) {
       generated={data?.generated}
       status={data?.status}
       contract={data?.contract}
+      partial={data?.partial}
+      pending={data?.pending}
+      hasProviderPending={data?.hasProviderPending}
+      hasContractPending={data?.hasContractPending}
+      coingeckoId={coingeckoId}
       market={market}
       isLoading={showBodySkeleton}
       variant="drawer"

@@ -102,6 +102,82 @@ function dedupeByUrl(links: GeneratedLink[]): GeneratedLink[] {
     })
 }
 
+/**
+ * Outcome of probing whether a single template would produce a URL right
+ * now — and, if not, WHY. This is the single source of truth shared by
+ * `expandTemplates` (real rendering) and `countPendingTemplates` (shimmer
+ * reservation): both call this probe, then branch on the result. Any new
+ * resolution rule (new provider, new kind, new {token}) only needs to be
+ * implemented here once.
+ *
+ * Why the three states:
+ *   - `resolved`    — a link would render with this `metaByProvider` now.
+ *                    Both expandTemplates and countPendingTemplates consume.
+ *   - `pending-meta`— no link now, but the same template WOULD link once
+ *                    the missing provider snapshot arrives (e.g. twitter
+ *                    template without meta coingecko row). countPending
+ *                    reserves a shimmer slot here; expandTemplates skips.
+ *   - `unresolvable`— no link, and no amount of fetching will produce one:
+ *                    empty ticker dropping a {symbol} pattern, an
+ *                    unknown source_key, or a {contract} template whose
+ *                    chain is not in the chain_map even WITH the current
+ *                    snapshot. Both functions must agree this is not
+ *                    pending — otherwise reserved shimmers would dangle.
+ */
+export type ResolveOutcome =
+  | { status: "resolved"; url: string }
+  | { status: "pending-meta" }
+  | { status: "unresolvable" }
+
+/**
+ * Probe whether `t` would produce a link under `metaByProvider`. This is
+ * the same probe expandTemplates uses to decide rendering and is the only
+ * place that knows how a template's URL is computed. Centralising the
+ * rule means `countPendingTemplates` cannot disagree with the real
+ * resolver: if the probe says `pending-meta`, a shimmer is reserved AND
+ * a link will appear once meta arrives; if the probe says `unresolvable`,
+ * no shimmer and no link; if `resolved`, a link now and no shimmer.
+ *
+ * Disabled templates are NOT probes' business — callers skip them on the
+ * outside so `enabled: false` semantics stay in one place.
+ */
+export function tryResolveTemplate(
+  t: LinkTemplate,
+  asset: AssetVars,
+  metaByProvider: Record<string, unknown>,
+): ResolveOutcome {
+  if (t.kind === "pattern") {
+    if (isContractPattern(t.url_pattern)) {
+      const cgMeta = metaByProvider.coingecko as CgMeta | undefined
+      if (!cgMeta) return { status: "pending-meta" }
+      // Meta exists. Same shared call as the real resolver — guarantees the
+      // chain_map decision is identical.
+      const url = expandContractPattern(t.url_pattern ?? "", t.chain_map, cgMeta)
+      return url ? { status: "resolved", url } : { status: "unresolvable" }
+    }
+    // {slug}/{symbol} pattern: depends only on AssetVars, which is always
+    // populated. An empty ticker drops {symbol}, but that has nothing to
+    // do with provider meta, so it's unresolvable (not pending).
+    const url = applyPattern(t.url_pattern ?? "", asset)
+    return url ? { status: "resolved", url } : { status: "unresolvable" }
+  }
+
+  // Provider kind. We use the SAME `resolveSource` call as the real
+  // resolver — if the snapshot for this provider is present, we resolve
+  // through the registry; if not, this is meta-pending. resolveSource
+  // returns `null` for unknown providers/keys, which we map to
+  // "unresolvable" so it doesn't get a reserved slot it can never fill.
+  const provider = t.provider ?? ""
+  const snapshot = metaByProvider[provider]
+  if (!snapshot) return { status: "pending-meta" }
+  const url = resolveSource(
+    provider,
+    t.source_key ?? "",
+    snapshot as Parameters<typeof resolveSource>[2],
+  )
+  return url ? { status: "resolved", url } : { status: "unresolvable" }
+}
+
 export function expandTemplates(
   templates: LinkTemplate[],
   asset: AssetVars,
@@ -111,31 +187,13 @@ export function expandTemplates(
 
   for (const t of templates) {
     if (!t.enabled) continue
-
-    const provider = t.provider ?? ""
-    const url =
-      t.kind === "pattern"
-        ? isContractPattern(t.url_pattern)
-          ? expandContractPattern(
-              t.url_pattern ?? "",
-              t.chain_map,
-              metaByProvider.coingecko as CgMeta | undefined,
-            ) ?? null
-          : applyPattern(t.url_pattern ?? "", asset)
-        : metaByProvider[provider]
-          ? resolveSource(
-              provider,
-              t.source_key ?? "",
-              metaByProvider[provider] as Parameters<typeof resolveSource>[2],
-            )
-          : null
-
-    if (!url) continue
+    const r = tryResolveTemplate(t, asset, metaByProvider)
+    if (r.status !== "resolved") continue
 
     out.push({
       id: `tpl:${t.id}`,
-      url,
-      label: resolveLabel(t.label, asset, url),
+      url: r.url,
+      label: resolveLabel(t.label, asset, r.url),
       icon: t.icon ?? undefined,
       category: t.category,
       tier: t.tier,
@@ -148,4 +206,56 @@ export function expandTemplates(
   }
 
   return dedupeByUrl(out)
+}
+
+/**
+ * For a cold coin (no curated links + meta missing) the storefront needs to
+ * reserve UI space for the links that WILL appear once the CoinGecko
+ * snapshot arrives. This pure function answers:
+ *   "given the templates that WOULD resolve if `metaByProvider` were
+ *    present, how many of those would land in each category?"
+ *
+ * The probe (`tryResolveTemplate`) is the SINGLE source of truth shared
+ * with `expandTemplates`. If the probe ever says `pending-meta`, this
+ * function reserves the slot; if it says `unresolvable`, no slot — the
+ * two callers cannot diverge on a future chain_map / source_key edit.
+ *
+ * Returned totals are the SOURCE OF TRUTH for the prefetch-time shimmer
+ * counts. {slug}/{symbol}-only patterns never go through this branch
+ * (the probe resolves them with empty ticker as `unresolvable`, not
+ * `pending-meta`).
+ */
+export type PendingByCategory = {
+  /** category key (templates[i].category) → count of meta-dependent templates
+   *  in that category that the probe classified as `pending-meta`. */
+  byCategory: Record<string, number>
+  /** True if ANY provider template was classified as `pending-meta`. */
+  hasProviderPending: boolean
+  /** True if any {contract} pattern template was classified as `pending-meta`. */
+  hasContractPending: boolean
+}
+
+export function countPendingTemplates(
+  templates: LinkTemplate[],
+  asset: AssetVars,
+  metaByProvider: Record<string, unknown>,
+): PendingByCategory {
+  const byCategory: Record<string, number> = {}
+  let hasProviderPending = false
+  let hasContractPending = false
+
+  for (const t of templates) {
+    if (!t.enabled) continue
+    const r = tryResolveTemplate(t, asset, metaByProvider)
+    if (r.status !== "pending-meta") continue
+
+    byCategory[t.category] = (byCategory[t.category] ?? 0) + 1
+    if (t.kind === "provider") {
+      hasProviderPending = true
+    } else if (isContractPattern(t.url_pattern)) {
+      hasContractPending = true
+    }
+  }
+
+  return { byCategory, hasProviderPending, hasContractPending }
 }

@@ -61,6 +61,14 @@ type LinksPayload = {
   status: "described" | "template" | "undescribed"
   /** Native-chain contract address from the CG snapshot, or null. */
   contract: { chain: string; address: string } | null
+  /** True only on the prefetch path when meta is missing and more links
+   *  would arrive after ensure. The client renders partial links + shimmer
+   *  reservations and triggers a full /api/links in the background. */
+  partial?: boolean
+  /** Per-category reserved shimmer slot counts (prefetch path only). */
+  pending?: { categoryKey: string; count: number }[]
+  hasProviderPending?: boolean
+  hasContractPending?: boolean
 }
 
 // Default 6h. Curated links + categories + asset identity only change when
@@ -73,6 +81,13 @@ const TTL = Number(process.env.LINKS_TTL_SECONDS ?? 6 * 60 * 60)
 const TTL_DEGRADED_SECONDS = Number(
   process.env.LINKS_TTL_DEGRADED_SECONDS ?? 60,
 )
+// PREFETCH responses are NEVER cached in KV: the client revalidates on
+// every open and the partial → full swap is cheaper than racing a write
+// here. CDN `s-maxage=10` instead — just enough to deduplicate hovers on
+// the same coin within the same user session.
+const TTL_PREFETCH_SECONDS = Number(
+  process.env.LINKS_TTL_PREFETCH_SECONDS ?? 10,
+)
 const ENSURE_INLINE_TIMEOUT_MS = Number(
   process.env.ENSURE_INLINE_TIMEOUT_MS ?? 5000,
 )
@@ -84,33 +99,45 @@ export async function GET(req: NextRequest) {
   const cg = (req.nextUrl.searchParams.get("cg") ?? "").trim()
   if (!cg) return json(emptyPayload(), 200, TTL_DEGRADED_SECONDS)
 
+  const isPrefetch = req.nextUrl.searchParams.get("prefetch") === "1"
+
   const cacheKey = await getLinkCacheKey(cg)
   const cached = await kvGet<LinksPayload>(cacheKey)
-  if (cached) return json(cached, 200, TTL)
+  // Only serve a cached FULL payload when the caller is opening the
+  // drawer (or we already have a full one). Prefetch callers MUST get the
+  // partial-shaped payload that's specifically tailored for "no ensure"
+  // runs — otherwise we'd hand them a full payload that means "meta
+  // already cached" while the prefetch path never verifies that's true.
+  // We treat any cached value as serving both paths because it's the
+  // post-ensure snapshot — the same partial/full analysis the client does
+  // still applies.
+  if (cached && !cached.partial) return json(cached, 200, TTL)
 
   const supabase = await supabaseServer()
   // Asset first: we need its id to load curated links and scoped categories.
   let asset = await loadAsset(supabase, cg)
   let curated = asset ? await loadCuratedLinks(supabase, asset.id) : ([] as Link[])
 
-  // Cold/template coin without curated links: do the snapshot warm INLINE
-  // but run it concurrently with every other read below. Described/curated
-  // coins skip this branch entirely.
+  // Cold/template coin without curated links: the click path warms the
+  // CoinGecko snapshot INLINE (this is the only network call we make to
+  // CG in response to user action). The prefetch path SKIPS the snapshot
+  // entirely — the spec is explicit: no CoinGecko budget on hovers that
+  // may never be committed to.
   const needsSnapshot =
     (!asset || asset.status === "template") && (curated?.length ?? 0) === 0
 
   // Fire the ensure immediately. We await its slot in the Promise.all below
   // so the entire response waits at most ENSURE_INLINE_TIMEOUT_MS, not
-  // (ensure + everything else).
-  const ensurePromise: Promise<void> = needsSnapshot
-    ? ensureAssetMetaInline(cg, ENSURE_INLINE_TIMEOUT_MS)
-    : Promise.resolve()
+  // (ensure + everything else). Prefetch never runs this.
+  const ensurePromise: Promise<void> =
+    needsSnapshot && !isPrefetch
+      ? ensureAssetMetaInline(cg, ENSURE_INLINE_TIMEOUT_MS)
+      : Promise.resolve()
 
-  // Meta read also runs in parallel — on the WARM path (needsSnapshot ===
-  // false) this is the only read we need, so we save the roundtrip we'd
-  // pay by re-reading after ensure. On the COLD path we IGNORE this
-  // response and re-read after ensure settles, because the snapshot is
-  // being inserted in parallel and the early read will return null.
+  // Meta read also runs in parallel — on the WARM path this is the only
+  // read we need; on the COLD CLICK path we re-read after ensure settles.
+  // On the COLD PREFETCH path we accept whatever's already in the DB —
+  // there is no ensure to wait for.
   const metaPromise = supabase
     .from("asset_meta")
     .select("data")
@@ -118,11 +145,10 @@ export async function GET(req: NextRequest) {
     .eq("provider", "coingecko")
     .maybeSingle() as unknown as Promise<{ data: { data: unknown } | null }>
 
-  // Kick off everything else in parallel. None of these depends on the
-  // ensure outcome *for a cached coin* (needsSnapshot === false). On the
-  // cold path we'll re-read asset/curated/meta AFTER ensure settles, but
-  // the network roundtrips for templates / categories / marketRow run
-  // alongside the snapshot fetch.
+  // Kick off everything else in parallel. On the cold click path we'll
+  // re-read asset/curated/meta AFTER ensure settles, but the network
+  // roundtrips for templates / categories / marketRow run alongside the
+  // snapshot fetch.
   const [marketRow, templates, categoriesRaw] = await Promise.all([
     getMarketRowFromCache(cg),
     getActiveTemplates(),
@@ -131,11 +157,11 @@ export async function GET(req: NextRequest) {
   ])
   const metaEarlyResp = await metaPromise
 
-  // If ensure ran, the stub might have been created and meta cached. Re-read
-  // the asset row, curated links, AND meta so the payload reflects the
-  // now-warm snapshot.
+  // If ensure ran (cold CLICK path only), the stub might have been
+  // created and meta cached. Re-read asset, curated links, AND meta so
+  // the payload reflects the now-warm snapshot.
   let metaRecord: { data: unknown } | null = metaEarlyResp?.data ?? null
-  if (needsSnapshot) {
+  if (needsSnapshot && !isPrefetch) {
     asset = await loadAsset(supabase, cg)
     curated = asset ? await loadCuratedLinks(supabase, asset.id) : ([] as Link[])
     const { data: metaFresh } = await supabase
@@ -159,6 +185,10 @@ export async function GET(req: NextRequest) {
   const meta = (metaRecord?.data ?? null) as Record<string, unknown> | null
 
   const assetVars = buildAssetVars(cg, asset, marketRow)
+  // partial=true is now derived entirely from the probe inside
+  // composeLinksPayload — both prefetch and degraded click responses
+  // emit it when any template is `pending-meta`. The route only decides
+  // whether to RUN ensure and which KV TTL to use.
   const composed = composeLinksPayload<CategoryMeta>({
     asset,
     assetId,
@@ -172,15 +202,19 @@ export async function GET(req: NextRequest) {
   const contract = pickNativeContract(meta)
   const payload: LinksPayload = { ...composed, contract }
 
+  if (isPrefetch) {
+    // Never write prefetch responses to KV: they're inherently per-user
+    // (the client treats them as partial and re-fetches the full on open).
+    // CDN still benefits from a short s-maxage to deduplicate rapid hovers.
+    return json(payload, 200, TTL_PREFETCH_SECONDS)
+  }
+
   // DEGRADED payload detection. The cold path can return a USABLE response
   // even without meta (generic templates with {slug}/{symbol} substitutions
-  // work fine), so the previous "links.length===0 && !generated &&
-  // !contract && !meta" test was too narrow — a {generated:true, meta:null}
-  // payload would have been cached at full TTL despite missing the contract
-  // chip and dex-specific links. The robust signal is: did the snapshot
-  // we wanted (meta) actually arrive? If we entered the cold path and meta
-  // is still missing, treat the response as degraded — bustLinkCaches from
-  // the in-flight ensure will retire this short-TTL entry within seconds.
+  // work fine). The robust signal is: did the snapshot we wanted actually
+  // arrive? If we entered the cold path and meta is still missing, treat
+  // the response as degraded — bustLinkCaches from the in-flight ensure
+  // will retire this short-TTL entry within seconds.
   const isDegraded = needsSnapshot && !meta
 
   const ttlSeconds = isDegraded ? TTL_DEGRADED_SECONDS : TTL
@@ -264,6 +298,7 @@ function emptyPayload(): LinksPayload {
     generated: false,
     status: "undescribed",
     contract: null,
+    partial: true,
   }
 }
 
