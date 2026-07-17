@@ -95,64 +95,73 @@ function DrawerBody({ open, coingeckoId, market, onClose }: BodyProps) {
   const enabled = open && !!coingeckoId
   const { data, isFetching } = useLinksPayload(coingeckoId, enabled)
 
-  // The cache may hold a `partial` payload from either source:
-  //   - prefetch (no ensure run on hover)
-  //   - a previous click whose ensure timed out at 5s
-  // On the next open we fire the FULL /api/links in the background —
-  // this is the only call in the open path that touches CoinGecko, and
-  // the user has committed by re-opening. The full response overwrites
-  // the cache via setQueryData on the same queryKey; the drawer's
-  // useQuery re-renders with the full payload. Shimmer slots (driven
-  // by `pending`) collapse naturally because the render path is
-  // identical for both shapes — only the link array changes.
+  // Guard prevents concurrent duplicate upgrade fetches for the same id.
+  // IMPORTANT: must be reset in the effect's cleanup so that StrictMode's
+  // double-invoke (mount → cleanup → mount) and any real re-mount / close
+  // both allow the next mount to start a fresh fetch.
   const upgradeStartedRef = useRef<string | null>(null)
-  const triggerFullFetch = (id: string) => {
-    const ac = new AbortController()
-    fetchLinksPayload(id, { signal: ac.signal })
-      .then((full) => {
-        if (ac.signal.aborted) return
-        qc.setQueryData<LinksPayload>(linksQueryKey(id), full)
-      })
-      .catch(() => {
-        // Allow the next open (or Retry) to try again after a failed upgrade.
-        if (!ac.signal.aborted && upgradeStartedRef.current === id) {
-          upgradeStartedRef.current = null
-        }
-      })
-    return () => ac.abort()
-  }
 
   useEffect(() => {
     if (!enabled || !coingeckoId || !data?.partial) return
     if (upgradeStartedRef.current === coingeckoId) return
+
     upgradeStartedRef.current = coingeckoId
-    return triggerFullFetch(coingeckoId)
-  }, [enabled, coingeckoId, data?.partial])
+    const id = coingeckoId
+    const ac = new AbortController()
 
-  useEffect(() => {
-    if (!open || !data || data.partial) return
-    upgradeStartedRef.current = null
-  }, [open, data])
+    fetchLinksPayload(id, { signal: ac.signal })
+      .then((full) => {
+        if (ac.signal.aborted) return
+        qc.setQueryData<LinksPayload>(linksQueryKey(id), full)
+        // If the "full" response is still partial (inline ensure timed out
+        // again), reset the guard so the next open can try once more.
+        if (full.partial && upgradeStartedRef.current === id) {
+          upgradeStartedRef.current = null
+        }
+      })
+      .catch(() => {
+        // Network / server error — reset guard so Retry / next open retries.
+        if (!ac.signal.aborted && upgradeStartedRef.current === id) {
+          upgradeStartedRef.current = null
+        }
+      })
 
+    return () => {
+      // Cleanup on unmount, close, or StrictMode double-invoke. Aborting the
+      // in-flight fetch AND resetting the guard ensures the next mount always
+      // starts a fresh attempt rather than being silently blocked.
+      ac.abort()
+      if (upgradeStartedRef.current === id) {
+        upgradeStartedRef.current = null
+      }
+    }
+  }, [enabled, coingeckoId, data?.partial, qc])
+
+  // When the drawer closes, clear the guard so the next open gets a clean
+  // slate regardless of whether the effect cleanup already ran.
   useEffect(() => {
     if (!open) upgradeStartedRef.current = null
   }, [open])
 
-  // Retry handler — fired by the AssetOverview "Retry" button after the
-  // partial upgrade has been failing for >8s. We re-fire the full fetch
-  // unconditionally, regardless of whether the cache currently shows
-  // partial or full (the user is asking us to refresh).
+  // Retry handler — fired by AssetOverview's Retry button after >8s stall.
+  // Bypasses the guard and forces a fresh full fetch unconditionally.
   useEffect(() => {
     if (!coingeckoId) return
+    const id = coingeckoId
     function onRetry(e: Event) {
-      const id = (e as CustomEvent<{ id: string }>).detail?.id
-      if (id !== coingeckoId) return
-      triggerFullFetch(coingeckoId!)
+      const detail = (e as CustomEvent<{ id: string }>).detail?.id
+      if (detail !== id) return
+      upgradeStartedRef.current = null
+      const ac = new AbortController()
+      fetchLinksPayload(id, { signal: ac.signal })
+        .then((full) => {
+          if (!ac.signal.aborted) qc.setQueryData<LinksPayload>(linksQueryKey(id), full)
+        })
+        .catch(() => {/* leave partial in place; user can Retry again */})
     }
     window.addEventListener("asset-drawer-retry", onRetry)
     return () => window.removeEventListener("asset-drawer-retry", onRetry)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coingeckoId])
+  }, [coingeckoId, qc])
 
   // Full-payload swap done by setQueryData above; the useQuery above
   // re-renders automatically.
