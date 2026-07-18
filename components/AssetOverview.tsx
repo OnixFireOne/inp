@@ -25,6 +25,7 @@ import { LinkList } from "./LinkList"
 import { GeneratedBadge } from "./GeneratedBadge"
 import { CategoryHeaderSkeleton, ChipSkeleton, LinkRowSkeleton } from "./Shimmer"
 import type { Link } from "@/types/asset"
+import { decideBodyView } from "@/lib/ui/asset-body-view"
 
 export interface AssetOverviewMarket {
   name: string
@@ -220,19 +221,26 @@ export function AssetOverview({
       {/* Body — LinkList area. Skeleton only here. */}
       <div className={variant === "drawer" ? "drawer-body flex-1 min-h-0" : ""}>
         <div className={variant === "drawer" ? "drawer-scroll p-5" : "p-6"}>
-          {showBodySkeleton ? (
-            <BodySkeleton />
-          ) : links.length === 0 && (!pending || pending.length === 0) ? (
-            <EmptyState />
-          ) : (
-            <LinkList
-              links={links}
-              categories={categories}
-              pending={pending}
-              hasContractPending={hasContractPending}
-              coingeckoId={coingeckoId}
-            />
-          )}
+          {(() => {
+            const view = decideBodyView({
+              showBodySkeleton,
+              isLoading,
+              partial,
+              linksCount: links.length,
+              pendingCount: pending?.length ?? 0,
+            })
+            if (view === "skeleton") return <BodySkeleton />
+            if (view === "empty") return <EmptyState />
+            return (
+              <LinkList
+                links={links}
+                categories={categories}
+                pending={pending}
+                hasContractPending={hasContractPending}
+                coingeckoId={coingeckoId}
+              />
+            )
+          })()}
           {/* Partial state footer: visible only while we're waiting for the
               full payload. The Retry button is the timeout/error fallback —
               AssetDrawer fires the full fetch in the background, so this

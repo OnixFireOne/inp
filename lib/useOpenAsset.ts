@@ -7,8 +7,11 @@
 // change → drawer renders in the very next frame, with zero network.
 //
 // URL SYNC (shareable links + back/forward):
-//   open  → window.history.pushState(null, "", "/asset/<id>")
-//   close → window.history.back()   (reverts to the URL we replaced)
+//   open from catalog    → window.history.pushState(null, "", "/asset/<id>")
+//   open while drawer up → window.history.replaceState(null, "", "/asset/<id>")
+//                          (single /asset/* entry on top of the catalog —
+//                           switching coins never grows history)
+//   close → window.history.back()   (reverts the single /asset/* entry)
 //   popstate → sync state from the URL (browser Back/Forward buttons).
 
 import { useCallback } from "react"
@@ -19,6 +22,10 @@ import {
   useDrawerId,
 } from "@/lib/drawer-state"
 import { stashMarketRow } from "@/lib/prefetch"
+import {
+  pushOrReplaceDrawerUrl,
+  maybeBackFromAsset,
+} from "@/lib/drawer-history"
 import type { MarketRow } from "@/lib/types"
 
 export function useOpenAsset() {
@@ -30,16 +37,15 @@ export function useOpenAsset() {
       const id = typeof rowOrId === "string" ? rowOrId : rowOrId.id
       if (typeof rowOrId !== "string") stashMarketRow(qc, rowOrId)
 
-      // URL: push a new entry only if the active URL isn't already
-      // /asset/<id>. Reopening the same coin must not stack history.
-      const target = `/asset/${id}`
-      const isOnAsset = typeof window !== "undefined" &&
-        window.location.pathname === target
+      // History invariant: at most one /asset/* entry above the catalog.
+      //   - opening from a non-/asset URL  → pushState (the first entry)
+      //   - switching coins while drawer is up → replaceState (same slot)
+      //   - reopening the coin already shown → no history op at all
       if (typeof window !== "undefined") {
-        if (!isOnAsset) {
-          window.history.pushState(null, "", target)
-        }
-        // Else: drawer already shows this id — leave URL alone.
+        pushOrReplaceDrawerUrl(
+          { history: window.history, location: window.location },
+          id,
+        )
       }
       openDrawer(rowOrId)
     },
@@ -52,9 +58,10 @@ export function useOpenAsset() {
       // Prefer history.back so the user's previous URL is restored exactly.
       // Only go back if the current entry IS the asset page (guard against
       // reopening via menu / external nav landing us on /asset/[id]).
-      if (window.location.pathname.startsWith("/asset/")) {
-        window.history.back()
-      }
+      maybeBackFromAsset({
+        history: window.history,
+        location: window.location,
+      })
     }
   }, [])
 

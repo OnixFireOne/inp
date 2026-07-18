@@ -165,6 +165,15 @@ function DrawerBody({ open, coingeckoId, market, onClose }: BodyProps) {
 }
 
 function MobileDrawer(props: AssetDrawerProps & { onClose: () => void }) {
+  // `key={coingeckoId}` remounts DrawerBody (and the AssetOverview inside
+  // it) when the user switches coins while the drawer is already open.
+  // That gives us a clean slate for each coin:
+  //   - the previous fetch is aborted by React Query's queryKey change,
+  //   - the upgrade-guard ref is reset by the previous useEffect cleanup,
+  //   - AssetOverview's useState(isLoading) re-initializes from the new
+  //     coingeckoId's query state, so the body skeleton paints immediately
+  //     on the cold path instead of briefly flashing the previous coin's
+  //     (possibly empty) LinkList / EmptyState.
   return (
     <VaulDrawer.Root open={props.open} onOpenChange={props.onOpenChange} shouldScaleBackground={false}>
       <VaulDrawer.Portal>
@@ -177,7 +186,13 @@ function MobileDrawer(props: AssetDrawerProps & { onClose: () => void }) {
           <VaulDrawer.Title className="sr-only">
             {props.market?.name || props.coingeckoId || "Asset overview"}
           </VaulDrawer.Title>
-          <DrawerBody open={props.open} coingeckoId={props.coingeckoId} market={props.market} onClose={props.onClose} />
+          <DrawerBody
+            key={props.coingeckoId ?? "_closed"}
+            open={props.open}
+            coingeckoId={props.coingeckoId}
+            market={props.market}
+            onClose={props.onClose}
+          />
         </VaulDrawer.Content>
       </VaulDrawer.Portal>
     </VaulDrawer.Root>
@@ -186,6 +201,9 @@ function MobileDrawer(props: AssetDrawerProps & { onClose: () => void }) {
 
 // Desktop: Radix side-panel
 function DesktopDrawer(props: AssetDrawerProps & { onClose: () => void }) {
+  // See MobileDrawer for the rationale on key={coingeckoId}: each coin
+  // gets a clean React subtree so we don't flash the previous coin's
+  // body while the new query is in flight.
   return (
     <div className="hidden md:block">
       <Dialog.Root open={props.open} onOpenChange={props.onOpenChange} modal={false}>
@@ -200,7 +218,13 @@ function DesktopDrawer(props: AssetDrawerProps & { onClose: () => void }) {
             <Dialog.Title className="sr-only">
               {props.market?.name || props.coingeckoId || "Asset overview"}
             </Dialog.Title>
-            <DrawerBody open={props.open} coingeckoId={props.coingeckoId} market={props.market} onClose={props.onClose} />
+            <DrawerBody
+              key={props.coingeckoId ?? "_closed"}
+              open={props.open}
+              coingeckoId={props.coingeckoId}
+              market={props.market}
+              onClose={props.onClose}
+            />
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
