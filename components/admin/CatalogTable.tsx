@@ -211,7 +211,7 @@ export function CatalogTable({
         {!loading && hasMore && (
           <button
             onClick={() => setPage((p) => p + 1)}
-            className="px-3 py-1.5 rounded border text-xs"
+            className="px-3 py-1.5 rounded border text-xs btn-default"
           >
             Загрузить ещё 100
           </button>
@@ -234,7 +234,7 @@ function FilterBtn({
   return (
     <button
       onClick={() => onChange(value)}
-      className={`px-3 py-1.5 text-sm rounded border ${active ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-foreground"}`}
+      className={`px-3 py-1.5 text-sm rounded border transition-colors duration-150 ${active ? "bg-[var(--surface)] border-[var(--accent)] text-[var(--text)]" : "border-transparent text-[var(--text-mut)] hover:text-foreground hover:bg-[var(--surface-2)]"}`}
     >
       {children}
     </button>

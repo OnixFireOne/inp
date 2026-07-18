@@ -32,7 +32,10 @@ export function AdminProviders({ children }: { children: ReactNode }) {
             // network on every focus.
             refetchOnWindowFocus: false,
             retry: 1,
-            staleTime: 30_000,
+            // Keep data cached for 60s; keep unused data for 30min
+            // (allows instant back-navigation without re-fetch).
+            staleTime: 60_000,
+            gcTime: 30 * 60 * 1000,
           },
         },
       }),
@@ -57,7 +60,7 @@ export function AdminProviders({ children }: { children: ReactNode }) {
           { name: "assets" },
           { name: "links" },
           { name: "markets" },
-          { name: "link_categories" },
+          { name: "link_categories", meta: { idColumnName: "key" } },
         ]}
         options={{ disableTelemetry: true }}
       >

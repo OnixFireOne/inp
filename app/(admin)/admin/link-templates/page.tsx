@@ -18,7 +18,10 @@
 // the editor gains a per-coin context.
 
 import { useEffect, useMemo, useState } from "react"
+import * as Dialog from "@radix-ui/react-dialog"
 import { useRouter } from "next/navigation"
+import { Checkbox } from "@/components/admin/Checkbox"
+import { Toggle } from "@/components/admin/Toggle"
 import {
   DndContext,
   closestCenter,
@@ -183,14 +186,14 @@ export default function LinkTemplatesPage() {
       await invalidateTv()
       setEditing(null)
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Не удалось сохранить")
+      alert(e instanceof Error ? e.message : "Failed to save")
     } finally {
       setSaving(false)
     }
   }
 
   async function onDelete(id: string) {
-    if (!confirm("Удалить шаблон?")) return
+    if (!confirm("Delete template?")) return
     await remove.mutateAsync({ resource: "link_templates", id })
     await invalidateTv()
   }
@@ -262,28 +265,28 @@ export default function LinkTemplatesPage() {
           <div>
             <button
               onClick={() => router.push("/admin/catalog")}
-              className="text-sm text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer mb-1"
+              className="text-sm text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer mb-1 btn-ghost"
             >
-              ← Каталог
+              ← Catalog
             </button>
-            <h1 className="text-xl font-medium">Шаблоны ссылок</h1>
+            <h1 className="text-xl font-medium">Link Templates</h1>
             <p className="text-sm text-[var(--text-mut)]">
-              Глобальные правила генерации виртуальных ссылок (pattern по переменным, provider — из снимка CG).
-              Порядок — только drag-and-drop; sort пишется автоматически.
+              Global rules for generating virtual links (pattern by variables, provider from CG snapshot).
+              Order — drag-and-drop only; sort is written automatically.
             </p>
           </div>
-          <button
-            onClick={startCreate}
-            className="px-3 py-1.5 rounded border text-sm"
-          >
-            + Добавить шаблон
-          </button>
+<button
+              onClick={startCreate}
+              className="px-3 py-1.5 rounded border text-sm btn-default"
+            >
+              + Add template
+            </button>
         </header>
 
         {/* category chips */}
         <div className="flex flex-wrap gap-2 mb-4">
           <Chip active={activeCategory === null} onClick={() => setActiveCategory(null)}>
-            Все
+            All
           </Chip>
           {categoryKeys.map((k) => (
             <Chip key={k} active={activeCategory === k} onClick={() => setActiveCategory(k)}>
@@ -317,19 +320,19 @@ export default function LinkTemplatesPage() {
               )
             })}
           {categoryKeys.length === 0 && !templatesQuery.query.isLoading && (
-            <div className="text-sm text-[var(--text-mut)]">Пока нет шаблонов.</div>
+            <div className="text-sm text-[var(--text-mut)]">No templates yet.</div>
           )}
         </div>
 
         {/* TЗ §7.5 (a) — available, but not added. Sample snapshot only. */}
         <section className="mt-10">
-          <h2 className="text-sm font-medium mb-2">Доступно, но не добавлено</h2>
+          <h2 className="text-sm font-medium mb-2">Available but not added</h2>
           <p className="text-xs text-[var(--text-mut)] mb-3">
-            Источники из реестра (coingecko), которые резолвятся на сэмпле, но для которых ещё нет включённого шаблона.
-            Превью и добавление с дефолтами.
+            Sources from the registry (coingecko) that resolve on the sample but don't have an enabled template yet.
+            Preview and add with defaults.
           </p>
           {availableSources.length === 0 ? (
-            <div className="text-xs text-[var(--text-mut)]">Нет доступных источников на сэмпле.</div>
+            <div className="text-xs text-[var(--text-mut)]">No available sources on sample.</div>
           ) : (
             <ul className="border rounded-lg divide-y">
               {availableSources.map((s) => (
@@ -341,9 +344,9 @@ export default function LinkTemplatesPage() {
                   </div>
                   <button
                     onClick={() => startCreateFromAvailable(s.provider, s.sourceKey)}
-                    className="text-xs px-2 py-1 rounded border"
+                    className="text-xs px-2 py-1 rounded border btn-default"
                   >
-                    Добавить
+                    Add
                   </button>
                 </li>
               ))}
@@ -392,7 +395,7 @@ function Chip({
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1 text-xs rounded border ${active ? "bg-[var(--surface)] border-[var(--accent)]" : "border-transparent text-[var(--text-mut)] hover:text-foreground"}`}
+      className={`px-3 py-1 text-xs rounded border transition-colors duration-150 ${active ? "bg-[var(--surface)] border-[var(--accent)] text-[var(--text)]" : "border-transparent text-[var(--text-mut)] hover:text-foreground hover:bg-[var(--surface-2)]"}`}
     >
       {children}
     </button>
@@ -490,13 +493,13 @@ function TemplateRow({
       >
         {row.enabled ? "on" : "off"}
       </span>
-      <button onClick={onEdit} className="text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer" aria-label="Редактировать">
+      <button onClick={onEdit} className="text-[var(--text-mut)] hover:text-[var(--text)] cursor-pointer btn-ghost" aria-label="Edit">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
         </svg>
       </button>
-      <button onClick={onDelete} className="text-xs text-rose-600 hover:text-rose-500 cursor-pointer">×</button>
+      <button onClick={onDelete} className="text-xs text-rose-600 hover:text-rose-500 cursor-pointer btn-ghost">×</button>
     </li>
   )
 }
@@ -519,45 +522,12 @@ function TemplateModal({
   const isCreate = !editing.id
   const kind = editing.kind === "provider" ? "provider" : "pattern"
 
-  // Provider prefill (TЗ §7.4): only on create or when fields are empty.
-  useEffect(() => {
-    if (kind !== "provider") return
-    const def = providerDefaults(editing.provider ?? "", editing.source_key ?? "")
-    if (!def) return
-    setEditing((prev) => {
-      if (!prev) return prev
-      const next = { ...prev }
-      const setIfEmpty = <K extends keyof LinkTemplate>(field: K, value: LinkTemplate[K]) => {
-        const cur = next[field]
-        if (cur === undefined || cur === null || cur === "") next[field] = value
-      }
-      if (isCreate) {
-        setIfEmpty("label", def.label)
-        setIfEmpty("icon", def.icon)
-        setIfEmpty("category", def.category)
-        setIfEmpty("tier", def.tier)
-      } else {
-        setIfEmpty("label", def.label)
-        setIfEmpty("icon", def.icon)
-      }
-      return next
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing.provider, editing.source_key, kind, isCreate])
-
-  // For {contract} patterns we need the chain map from the form (live) and
-  // a sample CgMeta with detail_platforms — the store uses SAMPLE_CG_META
-  // (which now has solana + ethereum). Preview mirrors the vitrina resolver:
-  // the SAME `expandContractPattern`, just against a synthetic snapshot.
+  // Preview computations
   const isContract = kind === "pattern" && isContractPattern(editing.url_pattern)
   const previewUrl: string | null = (() => {
     if (kind === "pattern" && editing.url_pattern) {
       if (isContract) {
-        // Use the form's current chain_map, not what's saved in DB.
-        return (
-          expandContractPattern(editing.url_pattern ?? "", editing.chain_map, SAMPLE_CG_META) ??
-          null
-        )
+        return expandContractPattern(editing.url_pattern ?? "", editing.chain_map, SAMPLE_CG_META) ?? null
       }
       return applyPattern(editing.url_pattern, SAMPLE_VARS)
     }
@@ -566,40 +536,49 @@ function TemplateModal({
     }
     return null
   })()
-  // "Битый шаблон" applies ONLY when {slug}/{symbol} fails — {contract}
-  // patterns render their own contextual hint (see previewHint below).
-  const previewBroken =
-    kind === "pattern" && !!editing.url_pattern && !isContract && previewUrl === null
-  // For {contract} patterns: empty/incomplete chain map is a hint, not an error.
-  const chainMapEntries = Object.entries(editing.chain_map ?? {}).filter(
-    ([k, v]) => k.trim() && v.trim(),
-  ).length
-  const contractHint =
-    isContract && chainMapEntries === 0
-      ? "Заполни Chain map — сэмпл не знает, как называть чейн для этого сайта."
-      : null
-  const previewIcon =
-    editing.icon ??
-    (kind === "provider"
-      ? providerDefaults(editing.provider ?? "", editing.source_key ?? "")?.icon ?? null
-      : null)
-  const previewName =
-    editing.label ||
-    (kind === "provider" ? editing.source_key || "preview" : "preview")
+  const previewBroken = kind === "pattern" && !!editing.url_pattern && !isContract && previewUrl === null
+  const chainMapEntries = Object.entries(editing.chain_map ?? {}).filter(([k, v]) => k.trim() && v.trim()).length
+  const contractHint = isContract && chainMapEntries === 0 ? "Fill Chain map — sample doesn't know the chain name for this site." : null
+  const previewIcon = editing.icon ?? (kind === "provider" ? providerDefaults(editing.provider ?? "", editing.source_key ?? "")?.icon ?? null : null)
+  const previewName = editing.label || (kind === "provider" ? editing.source_key || "preview" : "preview")
+
+  // Track dirty state - reset when editing changes (i.e., modal opens)
+  const [isDirty, setIsDirty] = useState(false)
+  useEffect(() => {
+    setIsDirty(false)
+  }, [editing.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleClose = (open: boolean) => {
+    if (!open) {
+      if (isDirty) {
+        if (!confirm("Discard unsaved changes?")) return
+      }
+      onClose()
+    }
+  }
+
+  // Mark dirty on any field change
+  const markDirty = () => setIsDirty(true)
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="bg-[var(--surface)] rounded-xl w-full max-w-2xl p-5 space-y-4">
-        <h4 className="font-medium">{isCreate ? "Новый шаблон" : "Редактировать шаблон"}</h4>
+    <Dialog.Root open={!!editing} onOpenChange={handleClose}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[60] bg-black/60" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-[61] -translate-x-1/2 -translate-y-1/2 w-[min(640px,94vw)] max-h-[88vh] overflow-y-auto rounded-xl bg-[var(--surface)] border border-[var(--border)] p-5 space-y-4"
+        >
+          <Dialog.Title className="font-medium">{isCreate ? "New template" : "Edit template"}</Dialog.Title>
 
         <div className="grid grid-cols-2 gap-3 text-sm">
           <Field label="Kind">
             <select
               className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]"
               value={kind}
-              onChange={(e) =>
+              onChange={(e) => {
+                markDirty()
                 setEditing({ ...editing, kind: e.target.value as "pattern" | "provider" })
-              }
+              }}
             >
               <option value="pattern">pattern</option>
               <option value="provider">provider</option>
@@ -609,7 +588,10 @@ function TemplateModal({
             <select
               className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]"
               value={editing.category ?? ""}
-              onChange={(e) => setEditing({ ...editing, category: e.target.value })}
+              onChange={(e) => {
+                markDirty()
+                setEditing({ ...editing, category: e.target.value })
+              }}
             >
               <option value="">— выбрать —</option>
               {globalCategories.map((c) => (
@@ -623,14 +605,20 @@ function TemplateModal({
             <input
               className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]"
               value={editing.label ?? ""}
-              onChange={(e) => setEditing({ ...editing, label: e.target.value })}
+              onChange={(e) => {
+                markDirty()
+                setEditing({ ...editing, label: e.target.value })
+              }}
             />
           </Field>
           <Field label="Icon (emoji или URL)">
             <input
               className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]"
               value={editing.icon ?? ""}
-              onChange={(e) => setEditing({ ...editing, icon: e.target.value })}
+              onChange={(e) => {
+                markDirty()
+                setEditing({ ...editing, icon: e.target.value })
+              }}
               placeholder="🦎 или https://..."
             />
           </Field>
@@ -638,7 +626,10 @@ function TemplateModal({
             <select
               className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]"
               value={editing.tier ?? "Trusted"}
-              onChange={(e) => setEditing({ ...editing, tier: e.target.value as "Core" | "Trusted" })}
+              onChange={(e) => {
+                markDirty()
+                setEditing({ ...editing, tier: e.target.value as "Core" | "Trusted" })
+              }}
             >
               {TIERS.map((t) => (
                 <option key={t} value={t}>{t}</option>
@@ -646,14 +637,16 @@ function TemplateModal({
             </select>
           </Field>
           <Field label="Enabled">
-            <label className="inline-flex items-center gap-2 mt-2">
-              <input
-                type="checkbox"
+            <div className="flex items-center h-[34px]">
+              <Toggle
                 checked={editing.enabled ?? true}
-                onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })}
+                onChange={(next) => {
+                  markDirty()
+                  setEditing({ ...editing, enabled: next })
+                }}
+                ariaLabel={editing.enabled ? "Enabled" : "Disabled"}
               />
-              <span className="text-xs text-[var(--text-mut)]">включён</span>
-            </label>
+            </div>
           </Field>
 
           {kind === "pattern" ? (
@@ -662,7 +655,10 @@ function TemplateModal({
                 <input
                   className="w-full border rounded px-2 py-1.5 bg-[var(--surface)] font-mono"
                   value={editing.url_pattern ?? ""}
-                  onChange={(e) => setEditing({ ...editing, url_pattern: e.target.value })}
+                  onChange={(e) => {
+                    markDirty()
+                    setEditing({ ...editing, url_pattern: e.target.value })
+                  }}
                   placeholder="https://www.coingecko.com/en/coins/{slug}"
                 />
                 <div className="flex flex-wrap gap-1 mt-2">
@@ -670,13 +666,14 @@ function TemplateModal({
                     <button
                       key={name}
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        markDirty()
                         setEditing({
                           ...editing,
                           url_pattern: `${editing.url_pattern ?? ""}{${name}}`,
                         })
-                      }
-                      className="text-[10px] uppercase px-1.5 py-0.5 rounded border border-zinc-300 text-zinc-600 hover:bg-zinc-100"
+                      }}
+                      className="text-[10px] uppercase px-1.5 py-0.5 rounded font-mono cursor-pointer bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/20 hover:bg-[var(--accent)]/20"
                       title={def.desc}
                     >
                       {`{${name}}`}
@@ -687,7 +684,10 @@ function TemplateModal({
               {isContractPattern(editing.url_pattern) && (
                 <ChainMapEditor
                   value={editing.chain_map ?? null}
-                  onChange={(cm) => setEditing({ ...editing, chain_map: cm })}
+                  onChange={(cm) => {
+                    markDirty()
+                    setEditing({ ...editing, chain_map: cm })
+                  }}
                 />
               )}
             </div>
@@ -697,7 +697,10 @@ function TemplateModal({
                 <select
                   className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]"
                   value={editing.provider ?? ""}
-                  onChange={(e) => setEditing({ ...editing, provider: e.target.value, source_key: "" })}
+                  onChange={(e) => {
+                    markDirty()
+                    setEditing({ ...editing, provider: e.target.value, source_key: "" })
+                  }}
                 >
                   <option value="">— выбрать —</option>
                   {providerList().map((p) => (
@@ -709,7 +712,10 @@ function TemplateModal({
                 <select
                   className="w-full border rounded px-2 py-1.5 bg-[var(--surface)]"
                   value={editing.source_key ?? ""}
-                  onChange={(e) => setEditing({ ...editing, source_key: e.target.value })}
+                  onChange={(e) => {
+                    markDirty()
+                    setEditing({ ...editing, source_key: e.target.value })
+                  }}
                   disabled={!editing.provider}
                 >
                   <option value="">— выбрать —</option>
@@ -751,14 +757,17 @@ function TemplateModal({
           <button
             onClick={onSubmit}
             disabled={saving}
-            className="px-3 py-1.5 rounded border bg-foreground text-background text-sm disabled:opacity-50"
+            className="px-3 py-1.5 rounded border bg-foreground text-background text-sm btn-primary"
           >
-            {saving ? "…" : "Сохранить"}
+            {saving ? "…" : "Save"}
           </button>
-          <button onClick={onClose} className="px-3 py-1.5 rounded border text-sm">Отмена</button>
+          <Dialog.Close asChild>
+            <button className="px-3 py-1.5 rounded border text-sm btn-default">Cancel</button>
+          </Dialog.Close>
         </div>
-      </div>
-    </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }
 
@@ -873,7 +882,7 @@ function ChainMapEditor({
         <button
           type="button"
           onClick={addRow}
-          className="w-full text-[11px] py-1 rounded border border-dashed text-[var(--text-mut)] hover:text-[var(--text)] hover:border-[var(--text)] cursor-pointer"
+          className="w-full text-[11px] py-1 rounded border border-dashed text-[var(--text-mut)] hover:text-[var(--text)] hover:border-[var(--text)] cursor-pointer btn-ghost"
         >
           + Добавить строку
         </button>
