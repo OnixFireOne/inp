@@ -117,6 +117,18 @@ function fmtPct(p: number) {
   return (p >= 0 ? "+" : "") + p.toFixed(2) + "%"
 }
 
+// Pure: pick the coins that the engine will actually plot. Shared by the
+// stats chips and computeNodes so they cannot drift apart.
+function selectShownCoins(coins: Coin[], mode: Mode, topN: number): Coin[] {
+  let shown = coins
+  if (mode === "gainers") shown = shown.filter((c) => c.pct > 0)
+  else if (mode === "losers") shown = shown.filter((c) => c.pct < 0)
+  // Sort by market cap desc, then trim to topN. slice() on a sorted array is
+  // stable in V8 (and engine recomputes layout, so any previous ordering is moot).
+  const sorted = shown.slice().sort((a, b) => b.marketCap - a.marketCap)
+  return sorted.slice(0, topN)
+}
+
 // -------------------------------------------------------------
 // Component
 // -------------------------------------------------------------
@@ -282,16 +294,19 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const sourceCoinsRef = useRef(sourceCoins)
   sourceCoinsRef.current = sourceCoins
 
-  // Stats chips (memoized)
+  // Stats chips (memoized). Count and extremes must come from the SAME set
+  // the engine plots — otherwise the chip stays at the previously-loaded max
+  // after the user narrows topN, because we cache rows above the requested N.
   const stats = useMemo(() => {
-    if (sourceCoins.length === 0) return null
-    const sorted = sourceCoins.slice().sort((a, b) => b.pct - a.pct)
+    const shown = selectShownCoins(sourceCoins, mode, topN)
+    if (shown.length === 0) return null
+    const sorted = shown.slice().sort((a, b) => b.pct - a.pct)
     return {
       top: sorted[0],
       bottom: sorted[sorted.length - 1],
-      count: sourceCoins.length,
+      count: shown.length,
     }
-  }, [sourceCoins])
+  }, [sourceCoins, topN, mode])
 
   // -------------------- Engine refs ------------------------------
   // All mutable engine state lives inside refs so the rAF loop never
@@ -579,11 +594,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
 
     function computeNodes() {
       const p = paramsRef.current
-      let set = sourceCoinsRef.current.slice()
-      if (p.mode === "gainers") set = set.filter((c) => c.pct > 0)
-      else if (p.mode === "losers") set = set.filter((c) => c.pct < 0)
-      set.sort((a, b) => b.marketCap - a.marketCap)
-      set = set.slice(0, p.topN)
+      const set = selectShownCoins(sourceCoinsRef.current, p.mode, p.topN)
 
       const prev: Record<string, { x: number; y: number; vx: number; vy: number }> = {}
       for (const n of s.nodes) prev[n.c.id] = { x: n.x, y: n.y, vx: n.vx, vy: n.vy }
