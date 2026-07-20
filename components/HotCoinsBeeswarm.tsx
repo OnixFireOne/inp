@@ -117,6 +117,18 @@ function fmtPct(p: number) {
   return (p >= 0 ? "+" : "") + p.toFixed(2) + "%"
 }
 
+// Pure: pick the coins that the engine will actually plot. Shared by the
+// stats chips and computeNodes so they cannot drift apart.
+function selectShownCoins(coins: Coin[], mode: Mode, topN: number): Coin[] {
+  let shown = coins
+  if (mode === "gainers") shown = shown.filter((c) => c.pct > 0)
+  else if (mode === "losers") shown = shown.filter((c) => c.pct < 0)
+  // Sort by market cap desc, then trim to topN. slice() on a sorted array is
+  // stable in V8 (and engine recomputes layout, so any previous ordering is moot).
+  const sorted = shown.slice().sort((a, b) => b.marketCap - a.marketCap)
+  return sorted.slice(0, topN)
+}
+
 // -------------------------------------------------------------
 // Component
 // -------------------------------------------------------------
@@ -197,6 +209,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const rowsRef = useRef(rows)
   const loadedPagesRef = useRef(coins.length > 0 ? 1 : 0)
   const loadingRef = useRef(false)
+  // The highest requested page is monotonic for this mount. This prevents a
+  // topN change from being lost when a previous page request is still running.
+  const wantPagesRef = useRef(1)
+  const aliveRef = useRef(true)
 
   useEffect(() => {
     rowsRef.current = rows
@@ -211,32 +227,46 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
 
   // React to the "Монет" slider (and the initial default): make sure enough
   // pages are loaded to cover the requested coin count, fetching on demand.
-  useEffect(() => {
-    const wantPages = clamp(Math.ceil(topN / PER_PAGE), 1, MAX_PAGES)
-    if (wantPages <= loadedPagesRef.current || loadingRef.current) return
-    let cancelled = false
+  // A request that arrives while the loader is busy raises the target ceiling;
+  // the active loader rereads it after each page, so it cannot be lost.
+  const runLoaderRef = useRef<() => void>(() => {})
+  runLoaderRef.current = () => {
+    if (loadingRef.current || !aliveRef.current) return
     loadingRef.current = true
-    ;(async () => {
+    void (async () => {
       try {
-        const collected: MarketRow[] = []
-        for (let p = loadedPagesRef.current + 1; p <= wantPages; p++) {
-          const res = await fetch(`/api/markets?page=${p}`)
+        while (aliveRef.current && loadedPagesRef.current < wantPagesRef.current) {
+          const page = loadedPagesRef.current + 1
+          const res = await fetch(`/api/markets?page=${page}`)
           if (!res.ok) break
           const json = (await res.json()) as { rows?: MarketRow[] }
-          collected.push(...(json.rows ?? []))
-          loadedPagesRef.current = p
-        }
-        if (!cancelled && collected.length > 0) {
-          setRows((prev) => mergeRows(prev, collected))
+          if (!aliveRef.current) break
+          setRows((prev) => mergeRows(prev, json.rows ?? []))
+          loadedPagesRef.current = page
         }
       } finally {
         loadingRef.current = false
+        // Cover a topN update that occurred between the final loop condition
+        // and releasing the loading guard.
+        if (aliveRef.current && loadedPagesRef.current < wantPagesRef.current) {
+          runLoaderRef.current()
+        }
       }
     })()
-    return () => {
-      cancelled = true
-    }
+  }
+
+  useEffect(() => {
+    const wantPages = clamp(Math.ceil(topN / PER_PAGE), 1, MAX_PAGES)
+    wantPagesRef.current = Math.max(wantPagesRef.current, wantPages)
+    runLoaderRef.current()
   }, [topN])
+
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
 
   // Map MarketRow → Coin. Stables / invalid rows are dropped here (mirrors the
   // prototype's baseList()); the "all" row is already gone via mergeRows.
@@ -264,16 +294,19 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const sourceCoinsRef = useRef(sourceCoins)
   sourceCoinsRef.current = sourceCoins
 
-  // Stats chips (memoized)
+  // Stats chips (memoized). Count and extremes must come from the SAME set
+  // the engine plots — otherwise the chip stays at the previously-loaded max
+  // after the user narrows topN, because we cache rows above the requested N.
   const stats = useMemo(() => {
-    if (sourceCoins.length === 0) return null
-    const sorted = sourceCoins.slice().sort((a, b) => b.pct - a.pct)
+    const shown = selectShownCoins(sourceCoins, mode, topN)
+    if (shown.length === 0) return null
+    const sorted = shown.slice().sort((a, b) => b.pct - a.pct)
     return {
       top: sorted[0],
       bottom: sorted[sorted.length - 1],
-      count: sourceCoins.length,
+      count: shown.length,
     }
-  }, [sourceCoins])
+  }, [sourceCoins, topN, mode])
 
   // -------------------- Engine refs ------------------------------
   // All mutable engine state lives inside refs so the rAF loop never
@@ -540,7 +573,10 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
             break
           }
         }
-        if (!done) nd.ty0 = 0
+        if (!done) {
+          const maxAbs = placed.reduce((m, p) => Math.max(m, Math.abs(p.ty0)), 0)
+          nd.ty0 = (up ? -1 : 1) * (maxAbs + nd.r + gap)
+        }
         placed.push(nd)
       }
       for (const n of st.nodes) n.ty = n.ty0 * (1 - flattenVal)
@@ -558,11 +594,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
 
     function computeNodes() {
       const p = paramsRef.current
-      let set = sourceCoinsRef.current.slice()
-      if (p.mode === "gainers") set = set.filter((c) => c.pct > 0)
-      else if (p.mode === "losers") set = set.filter((c) => c.pct < 0)
-      set.sort((a, b) => b.marketCap - a.marketCap)
-      set = set.slice(0, p.topN)
+      const set = selectShownCoins(sourceCoinsRef.current, p.mode, p.topN)
 
       const prev: Record<string, { x: number; y: number; vx: number; vy: number }> = {}
       for (const n of s.nodes) prev[n.c.id] = { x: n.x, y: n.y, vx: n.vx, vy: n.vy }
@@ -639,7 +671,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       for (const n of s.nodes) if (n.r > maxR) maxR = n.r
       const ord = s.nodes.slice().sort((a, b) => a.x - b.x)
       const reach = maxR * 2 * hexF + densityVal
-      for (let pass = 0; pass < 10; pass++) {
+      for (let pass = 0; pass < 30; pass++) {
         let moved = false
         for (let i = 0; i < ord.length; i++) {
           const a = ord[i]
@@ -968,17 +1000,49 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         const key = edge + ":" + sign
         ;(buckets[key] ||= []).push(n)
       }
-      ctx!.textAlign = "center"
-      ctx!.textBaseline = "middle"
+      type Edge = "L" | "R" | "T" | "B"
+      type Pin = { edge: Edge; x: number; y: number; pos: number; arr: Node[] }
+      const pins: Pin[] = []
       for (const key in buckets) {
-        const edge = key[0]
+        const edge = key[0] as Edge
         const arr = buckets[key].sort(
           (a, b) => Math.abs(b.c.pct) - Math.abs(a.c.pct),
         )
         const rep = arr[0]
         const R = rot(rep.x, rep.y)
-        const sx = clamp(s.panX + R.x * s.zoom, minX, maxX)
-        const sy = clamp(s.panY + R.y * s.zoom, minY, maxY)
+        const x = clamp(s.panX + R.x * s.zoom, minX, maxX)
+        const y = clamp(s.panY + R.y * s.zoom, minY, maxY)
+        pins.push({ edge, x, y, pos: edge === "L" || edge === "R" ? y : x, arr })
+      }
+
+      // Pins with different signs can clamp to the same point. Separate every
+      // pin on a shared edge along its free axis before drawing or hit-testing.
+      const MIN_GAP = 30
+      for (const edge of ["L", "R", "T", "B"] as const) {
+        const group = pins.filter((pin) => pin.edge === edge)
+        if (group.length < 2) continue
+        group.sort((a, b) => a.pos - b.pos)
+        for (let i = 1; i < group.length; i++) {
+          group[i].pos = Math.max(group[i].pos, group[i - 1].pos + MIN_GAP)
+        }
+        const minBound = edge === "L" || edge === "R" ? minY : minX
+        const maxBound = edge === "L" || edge === "R" ? maxY : maxX
+        group[group.length - 1].pos = Math.min(group[group.length - 1].pos, maxBound)
+        for (let i = group.length - 2; i >= 0; i--) {
+          group[i].pos = Math.min(group[i].pos, group[i + 1].pos - MIN_GAP)
+        }
+        // The drawable span is always wide enough for the current two sign
+        // buckets, but retain the lower bound for very small canvases.
+        for (const pin of group) pin.pos = clamp(pin.pos, minBound, maxBound)
+      }
+
+      ctx!.textAlign = "center"
+      ctx!.textBaseline = "middle"
+      for (const pin of pins) {
+        const { edge, arr } = pin
+        const rep = arr[0]
+        const sx = edge === "L" || edge === "R" ? pin.x : pin.pos
+        const sy = edge === "L" || edge === "R" ? pin.pos : pin.y
         const col = rep.c.pct >= 0 ? GREEN : RED
         const pr = 8
         // кружок-пин
@@ -1013,8 +1077,8 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
           ctx!.font = "700 9px " + FONT
           ctx!.fillText(String(arr.length), bx, by)
         }
-        // радиус пина для хит-теста (с запасом, чтобы попадать и по бейджу)
-        s.edgePins.push({ x: sx, y: sy, r: Math.max(pr, 11), node: rep })
+        // Радиус включает бейдж, а координаты уже соответствуют видимому пину.
+        s.edgePins.push({ x: sx, y: sy, r: Math.max(pr + 9, 17), node: rep })
       }
     }
 
@@ -1299,10 +1363,10 @@ function onCanvasClick(e: MouseEvent) {
           </button>
       <div className="flex flex-wrap items-baseline gap-2 mb-1">
         <h2 className="text-lg font-semibold tracking-tight">
-          Горячие монеты — Beeswarm
+          Hot coins — Beeswarm
         </h2>
           <span className="text-xs text-[var(--text-mut)]">
-            24ч · топ-{topN} · стейблы скрыты
+            24h · top-{topN} · stables hidden
           </span>
       </div>
 
@@ -1310,20 +1374,20 @@ function onCanvasClick(e: MouseEvent) {
       {stats && (
         <div className="flex flex-wrap gap-2 mb-3">
           <span className="chip">
-            <span className="text-[var(--text-mut)]">🚀 Лидер роста:</span>{" "}
+            <span className="text-[var(--text-mut)]">🚀 Top gainer:</span>{" "}
             <b style={{ color: "#16c784" }}>
               {stats.top.symbol} {fmtPct(stats.top.pct)}
             </b>
           </span>
           <span className="chip">
-            <span className="text-[var(--text-mut)]">🔻 Лидер падения:</span>{" "}
+            <span className="text-[var(--text-mut)]">🔻 Top loser:</span>{" "}
             <b style={{ color: "#ea3943" }}>
               {stats.bottom.symbol} {fmtPct(stats.bottom.pct)}
             </b>
           </span>
           <span className="chip">
-            <span className="text-[var(--text-mut)]">📊 На графике:</span>{" "}
-            <b>{sourceCoins.length}</b> монет
+            <span className="text-[var(--text-mut)]">📊 On chart:</span>{" "}
+            <b>{stats.count}</b> coins
           </span>
         </div>
       )}

@@ -16,7 +16,10 @@ import type { MarketsResponse, MarketRow } from "@/lib/types"
 const BASE = process.env.COINGECKO_BASE || "https://api.coingecko.com/api/v3"
 const KEY = process.env.COINGECKO_API_KEY || ""
 const TTL = Number(process.env.MARKETS_TTL_SECONDS ?? 45)
-const PER_PAGE = 100
+// CoinGecko permits at most 250 rows per /coins/markets request. Clients keep
+// their existing 100-row pagination while the KV cache stores 250-row chunks.
+const CLIENT_PER_PAGE = 100
+const COINGECKO_PER_PAGE = 250
 
 // Curated list of stable / gold / tokenized-bond symbols that the beeswarm
 // (and any "hot" view) hides. Symbols are matched case-insensitively. Symbols
@@ -48,6 +51,30 @@ function isStableSymbol(symbol: string): boolean {
   const up = symbol.toUpperCase()
   if (STABLE_SYMBOL_EXACT.has(up)) return true
   return STABLE_SYMBOL_PATTERNS.some((re) => re.test(up))
+}
+
+// Map a raw CoinGecko `/coins/markets` payload to our `MarketRow` shape.
+// Shared between the single-coin lookup and the chunked full-list path so
+// stable classification and sparkline normalization stay consistent.
+function mapCoinGeckoRow(r: any): MarketRow {
+  return {
+    id: String(r.id),
+    rank: typeof r.market_cap_rank === "number" ? r.market_cap_rank : 0,
+    name: String(r.name ?? ""),
+    symbol: String(r.symbol ?? "").toUpperCase(),
+    image: typeof r.image === "string" ? r.image : "",
+    price: Number(r.current_price ?? 0),
+    marketCap: r.market_cap == null ? null : Number(r.market_cap),
+    change24h: Number(r.price_change_percentage_24h ?? 0),
+    change30d: r.price_change_percentage_30d_in_currency == null
+      ? null : Number(r.price_change_percentage_30d_in_currency),
+    change1y: r.price_change_percentage_1y_in_currency == null
+      ? null : Number(r.price_change_percentage_1y_in_currency),
+    sparkline: Array.isArray(r.sparkline_in_7d?.price)
+      ? (r.sparkline_in_7d.price as number[])
+      : [],
+    stable: isStableSymbol(String(r.symbol ?? "")),
+  }
 }
 
 function getCoinGeckoHeaders() {
@@ -82,84 +109,82 @@ export async function GET(req: NextRequest) {
     }
 
     const raw = (await res.json()) as Array<any>
-    const rows: MarketRow[] = raw.map((r) => ({
-      id: String(r.id),
-      rank: typeof r.market_cap_rank === "number" ? r.market_cap_rank : 0,
-      name: String(r.name ?? ""),
-      symbol: String(r.symbol ?? "").toUpperCase(),
-      image: typeof r.image === "string" ? r.image : "",
-      price: Number(r.current_price ?? 0),
-      marketCap:
-        r.market_cap == null ? null : Number(r.market_cap),
-      change24h: Number(r.price_change_percentage_24h ?? 0),
-      change30d: r.price_change_percentage_30d_in_currency == null
-        ? null : Number(r.price_change_percentage_30d_in_currency),
-      change1y: r.price_change_percentage_1y_in_currency == null
-        ? null : Number(r.price_change_percentage_1y_in_currency),
-      sparkline: [],
-      stable: isStableSymbol(String(r.symbol ?? "")),
-    }))
+    const rows: MarketRow[] = raw.map((r) => ({ ...mapCoinGeckoRow(r), sparkline: [] }))
 
     const payload = { rows }
     await kvSetEx(cacheKey, TTL, payload)
     return json(payload)
   }
 
-  const cacheKey = `markets:page:${page}`
-  const cached = await kvGet<MarketsResponse>(cacheKey)
-  if (cached) return json(cached)
-
-  const url =
-    `${BASE}/coins/markets?vs_currency=usd` +
-    `&order=market_cap_desc&per_page=${PER_PAGE}&page=${page}` +
-    `&sparkline=true&price_change_percentage=24h,30d,1y`
-
-  const res = await fetch(url, { headers: getCoinGeckoHeaders() })
-  if (!res.ok) {
-    return json({ rows: [], page, perPage: PER_PAGE, hasMore: false }, 200)
+  // Return one 250-row chunk of the global market-cap ranking, hitting
+  // CoinGecko on a miss and caching the result. Returning `null` signals a
+  // hard failure (non-OK response) so the caller can short-circuit cleanly.
+  async function getChunk(chunk: number): Promise<MarketRow[] | null> {
+    const cacheKey = `markets:page:${chunk}`
+    const cached = await kvGet<MarketRow[]>(cacheKey)
+    if (cached) return cached
+    const url =
+      `${BASE}/coins/markets?vs_currency=usd` +
+      `&order=market_cap_desc&per_page=${COINGECKO_PER_PAGE}&page=${chunk}` +
+      `&sparkline=true&price_change_percentage=24h,30d,1y`
+    const res = await fetch(url, { headers: getCoinGeckoHeaders() })
+    if (!res.ok) return null
+    const raw = (await res.json()) as Array<any>
+    const rows = raw.map(mapCoinGeckoRow)
+    await kvSetEx(cacheKey, TTL, rows)
+    return rows
   }
 
-  const raw = (await res.json()) as Array<any>
-  const rows: MarketRow[] = raw.map((r) => ({
-    id: String(r.id),
-    rank: typeof r.market_cap_rank === "number" ? r.market_cap_rank : 0,
-    name: String(r.name ?? ""),
-    symbol: String(r.symbol ?? "").toUpperCase(),
-    image: typeof r.image === "string" ? r.image : "",
-    price: Number(r.current_price ?? 0),
-    marketCap:
-      r.market_cap == null ? null : Number(r.market_cap),
-    change24h: Number(r.price_change_percentage_24h ?? 0),
-    change30d: r.price_change_percentage_30d_in_currency == null
-      ? null : Number(r.price_change_percentage_30d_in_currency),
-    change1y: r.price_change_percentage_1y_in_currency == null
-      ? null : Number(r.price_change_percentage_1y_in_currency),
-    sparkline: Array.isArray(r.sparkline_in_7d?.price)
-      ? (r.sparkline_in_7d.price as number[])
-      : [],
-    stable: isStableSymbol(String(r.symbol ?? "")),
-  }))
+  // A client page can straddle a chunk boundary (e.g. page 3 covers ranks
+  // 201–300, while chunks are 1–250 / 251–500). Stitch together every chunk
+  // the requested [start, end) window overlaps.
+  const start = (page - 1) * CLIENT_PER_PAGE
+  const end = start + CLIENT_PER_PAGE
+  const firstChunk = Math.floor(start / COINGECKO_PER_PAGE) + 1
+  const lastChunk = Math.floor((end - 1) / COINGECKO_PER_PAGE) + 1
 
-  // On page 1 only: also pull /global and prepend a synthetic "All Crypto" row
-  // with real totals (market cap, 24h volume, 24h change) and a reconstructed
-  // 7d total-market-cap sparkline.
+  const rows: MarketRow[] = []
+  let firstChunkRows: MarketRow[] = []
+  let lastChunkRows: MarketRow[] = []
+  for (let c = firstChunk; c <= lastChunk; c++) {
+    const chunkRows = await getChunk(c)
+    if (!chunkRows) break // partial result is better than an empty payload
+    if (c === firstChunk) firstChunkRows = chunkRows
+    lastChunkRows = chunkRows
+    const chunkStart = (c - 1) * COINGECKO_PER_PAGE
+    rows.push(
+      ...chunkRows.slice(
+        Math.max(0, start - chunkStart),
+        Math.max(0, end - chunkStart),
+      ),
+    )
+  }
+
+  // On client page 1 only, prepend the synthetic aggregate row. The complete
+  // first external chunk is intentionally supplied so its sparkline uses 250 coins.
   if (page === 1) {
-    const allRow = await buildAllRow(rows)
-    if (allRow) {
-      rows.unshift(allRow)
-    }
+    const allRow = await buildAllRow(firstChunkRows)
+    if (allRow) rows.unshift(allRow)
   }
 
-  const payload: MarketsResponse = {
+  // hasMore = either the current chunk holds rows past the requested window,
+  // or the last chunk we touched looks full (suggesting another chunk exists).
+  // When the very first chunk failed we have no usable rows — report no further
+  // pages rather than guessing based on an empty `lastChunkRows`.
+  const lastChunkGlobalEnd =
+    lastChunkRows.length > 0
+      ? (lastChunk - 1) * COINGECKO_PER_PAGE + lastChunkRows.length
+      : 0
+  const hasMore =
+    rows.length > 0 &&
+    (lastChunkGlobalEnd > end || lastChunkRows.length === COINGECKO_PER_PAGE)
+
+  return json({
     rows,
     page,
-    perPage: PER_PAGE,
-    // CoinGecko returns fewer items on the last page.
-    hasMore: rows.length - (page === 1 ? 1 : 0) === PER_PAGE,
-  }
-
-  await kvSetEx(cacheKey, TTL, payload)
-  return json(payload)
+    perPage: CLIENT_PER_PAGE,
+    hasMore,
+  })
 }
 
 function json(data: unknown, status = 200) {
