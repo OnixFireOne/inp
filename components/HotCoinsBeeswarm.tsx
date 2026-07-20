@@ -1363,10 +1363,10 @@ function onCanvasClick(e: MouseEvent) {
           </button>
       <div className="flex flex-wrap items-baseline gap-2 mb-1">
         <h2 className="text-lg font-semibold tracking-tight">
-          Горячие монеты — Beeswarm
+          Hot coins — Beeswarm
         </h2>
           <span className="text-xs text-[var(--text-mut)]">
-            24ч · топ-{topN} · стейблы скрыты
+            24h · top-{topN} · stables hidden
           </span>
       </div>
 
@@ -1374,20 +1374,20 @@ function onCanvasClick(e: MouseEvent) {
       {stats && (
         <div className="flex flex-wrap gap-2 mb-3">
           <span className="chip">
-            <span className="text-[var(--text-mut)]">🚀 Лидер роста:</span>{" "}
+            <span className="text-[var(--text-mut)]">🚀 Top gainer:</span>{" "}
             <b style={{ color: "#16c784" }}>
               {stats.top.symbol} {fmtPct(stats.top.pct)}
             </b>
           </span>
           <span className="chip">
-            <span className="text-[var(--text-mut)]">🔻 Лидер падения:</span>{" "}
+            <span className="text-[var(--text-mut)]">🔻 Top loser:</span>{" "}
             <b style={{ color: "#ea3943" }}>
               {stats.bottom.symbol} {fmtPct(stats.bottom.pct)}
             </b>
           </span>
           <span className="chip">
-            <span className="text-[var(--text-mut)]">📊 На графике:</span>{" "}
-            <b>{sourceCoins.length}</b> монет
+            <span className="text-[var(--text-mut)]">📊 On chart:</span>{" "}
+            <b>{stats.count}</b> coins
           </span>
         </div>
       )}
