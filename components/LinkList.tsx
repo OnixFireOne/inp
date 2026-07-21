@@ -18,7 +18,7 @@
 
 import type { Link } from "@/types/asset"
 import { LinkIconBtn } from "./LinkIconBtn"
-import { CategoryHeaderSkeleton, LinkRowSkeleton } from "./Shimmer"
+import { CategoryHeaderSkeleton, LinkRowSkeleton, LINK_ICON_SIZE } from "./Shimmer"
 
 interface CategoryMeta {
   key: string
@@ -131,7 +131,7 @@ export function LinkList({
                   icon={link.icon}
                   name={link.name}
                   description={link.description}
-                  size={link.tier === "Core" ? 28 : 20}
+                  size={LINK_ICON_SIZE}
                   generated={!allGenerated && link.generated === true}
                 />
               ))}
@@ -140,7 +140,7 @@ export function LinkList({
                 // the server. When the full payload arrives the real
                 // link with id `tpl:<templateId>` mounts at this exact
                 // DOM position; React reconciles by key, so no shift.
-                <LinkRowSkeleton key={`pending:${category}:${i}`} tier={i === 0 ? "Core" : "Trusted"} />
+                <LinkRowSkeleton key={`pending:${category}:${i}`} />
               ))}
             </div>
           </section>
@@ -154,8 +154,8 @@ export function LinkList({
             <CategoryHeaderSkeleton />
           </div>
           <div className="flex flex-wrap gap-2">
-            <LinkRowSkeleton key="pending:provider:0" tier="Trusted" />
-            <LinkRowSkeleton key="pending:provider:1" tier="Trusted" />
+            <LinkRowSkeleton key="pending:provider:0" />
+            <LinkRowSkeleton key="pending:provider:1" />
           </div>
         </section>
       )}

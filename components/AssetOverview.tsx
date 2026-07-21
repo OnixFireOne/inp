@@ -297,19 +297,20 @@ function RetryButton({ coingeckoId }: { coingeckoId?: string | null }) {
 }
 
 // Cold-load skeleton uses neutral category headers because the actual
-// category metadata has not arrived yet.
+// category metadata has not arrived yet. Every row is the same size —
+// Core tier isn't shipped yet, so we don't reserve any larger slots.
 function BodySkeleton() {
-  const groups: Array<"Core" | "Trusted"> = ["Core", "Trusted", "Trusted", "Trusted"]
+  const groupCounts = [2, 3, 3, 3]
   return (
     <div className="space-y-6" aria-busy="true">
-      {groups.map((tier, groupIndex) => (
+      {groupCounts.map((count, groupIndex) => (
         <section key={groupIndex}>
           <div className="text-xs uppercase tracking-wide mb-2">
             <CategoryHeaderSkeleton />
           </div>
           <div className="flex flex-wrap gap-2">
-            {Array.from({ length: groupIndex === 0 ? 2 : 3 }).map((_, itemIndex) => (
-              <LinkRowSkeleton key={itemIndex} tier={tier} id={`skel:cold:${groupIndex}:${itemIndex}`} />
+            {Array.from({ length: count }).map((_, itemIndex) => (
+              <LinkRowSkeleton key={`skel:cold:${groupIndex}:${itemIndex}`} />
             ))}
           </div>
         </section>
