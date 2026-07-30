@@ -7,7 +7,7 @@
 // change, with a 7d sparkline reconstructed from the top-100 individual
 // sparklines (top-100 ≈ 90%+ of total cap → very close proxy to total market).
 //
-// Cache: short TTL (default 45s). Hides the API key. Shared across all users.
+// Cache: short TTL (default 120s). Hides the API key. Shared across all users.
 
 import { NextRequest } from "next/server"
 import { kvGet, kvSetEx } from "@/lib/kv"
@@ -15,7 +15,14 @@ import type { MarketsResponse, MarketRow } from "@/lib/types"
 
 const BASE = process.env.COINGECKO_BASE || "https://api.coingecko.com/api/v3"
 const KEY = process.env.COINGECKO_API_KEY || ""
-const TTL = Number(process.env.MARKETS_TTL_SECONDS ?? 45)
+// TTL for the chunked /coins/markets cache (markets:page:N, markets:ids:…).
+// Shared with lib/asset-meta/markets-warm.ts which writes the same key family.
+const TTL = Number(process.env.MARKETS_TTL_SECONDS ?? 120)
+// /global is its own endpoint with its own cadence. Cached at the RAW
+// response level (`g` / `data` object) — the sparkline is rebuilt from the
+// fresh chunked rows on every request, so we don't want to cache the
+// synthesized `allRow`.
+const GLOBAL_TTL = Number(process.env.GLOBAL_TTL_SECONDS ?? 120)
 // CoinGecko permits at most 250 rows per /coins/markets request. Clients keep
 // their existing 100-row pagination while the KV cache stores 250-row chunks.
 const CLIENT_PER_PAGE = 100
@@ -213,16 +220,29 @@ function json(data: unknown, status = 200) {
 // coin's market cap to its price ratio at point t. Top-100 covers ≈90%+ of
 // total cap → very close visual proxy for the whole market.
 async function buildAllRow(rows: MarketRow[]): Promise<MarketRow | null> {
-  let g: any = null
-  try {
-    const url = `${BASE}/global`
-    const res = await fetch(url, { headers: getCoinGeckoHeaders() })
-    if (res.ok) {
-      const raw = (await res.json()) as any
-      g = raw?.data ?? null
+  // /global is the single most-called endpoint on page === 1 — without a
+  // cache every refresh of /api/markets?page=1 hits CoinGecko twice. Cache
+  // the raw `data` payload; the synthetic row (incl. the sparkline, which
+  // is rebuilt from the freshly-loaded chunked rows) is NOT cached.
+  const GLOBAL_KEY = "coingecko:global:usd"
+  let g: any = await kvGet<any>(GLOBAL_KEY)
+  if (!g) {
+    try {
+      const url = `${BASE}/global`
+      const res = await fetch(url, { headers: getCoinGeckoHeaders() })
+      if (res.ok) {
+        const raw = (await res.json()) as any
+        g = raw?.data ?? null
+        // Only cache successful + well-formed payloads; failures fall back
+        // to `return null` below and stay uncached so the next request
+        // can try again immediately.
+        if (g && g.total_market_cap && g.total_volume) {
+          await kvSetEx(GLOBAL_KEY, GLOBAL_TTL, g)
+        }
+      }
+    } catch {
+      g = null
     }
-  } catch {
-    g = null
   }
   if (!g || !g.total_market_cap || !g.total_volume) return null
 
