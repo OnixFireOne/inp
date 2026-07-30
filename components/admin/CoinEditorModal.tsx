@@ -30,7 +30,7 @@ export function CoinEditorModal({ row, described, onClose, onMaterialized }: Coi
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-[min(920px,94vw)] max-h-[88vh] overflow-y-auto rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-2xl p-5 drawer-scroll"
+          className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-[min(920px,94vw)] max-h-[88vh] overflow-y-auto rounded-2xl bg-[var(--surface)] border border-[var(--border)] shadow-2xl p-5 scrollbar-thin"
         >
           <div className="flex items-center justify-between mb-3">
             <Dialog.Title className="text-base font-semibold">

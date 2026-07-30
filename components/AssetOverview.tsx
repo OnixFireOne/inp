@@ -219,9 +219,14 @@ export function AssetOverview({
       )}
 
       {/* Body — LinkList area. Skeleton only here.
-          Scroll container lives in MobileDrawer (AssetDrawer.tsx), so the
-          drawer variant here is a plain flex child. */}
-      <div className={variant === "drawer" ? "flex-1 min-h-0 overflow-x-visible" : ""}>
+          Drawer variant is the desktop drawer here; the mobile Vaul drawer
+          lives in MobileDrawer (AssetDrawer.tsx) and provides its own
+          scroll wrapper. `md:` prefix means the mobile drawer (which
+          mounts below md via MobileDrawer's branch) doesn't get a second
+          scroll container. `min-h-0` lets `flex-1` resolve to a real
+          height inside Dialog.Content's flex column so the y-scroll has
+          something to bound. */}
+      <div className={variant === "drawer" ? "flex-1 min-h-0 md:overflow-y-auto md:overscroll-contain scrollbar-thin" : ""}>
         <div className={variant === "drawer" ? "p-5" : "p-6"}>
           {(() => {
             const view = decideBodyView({
