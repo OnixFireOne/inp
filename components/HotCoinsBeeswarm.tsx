@@ -330,12 +330,6 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     cssH: 0,
     orient: "h" as "h" | "v",
     initialized: false,
-    didDrag: false,
-    isDragging: false,
-    startX: 0,
-    startY: 0,
-    startPanX: 0,
-    startPanY: 0,
     // Edge pins (screen-space indicators for off-screen nodes)
     edgePins: [] as Array<{ x: number; y: number; r: number; node: Node }>,
     // Default-view anchor (saved by fitView)
@@ -1095,43 +1089,196 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     }
 
     // ---- event handlers --------------------------------------
+    // All canvas interaction goes through Pointer Events so the SAME code
+    // path serves mouse (desktop) and touch (mobile/tablet):
+    //   • 1 active pointer  → pan with a 8 px drag threshold (4 px is too
+    //     sensitive to a trembling finger).
+    //   • 2 active pointers → pinch zoom + pan from the midpoint between
+    //     the two fingers. Center = midpoint, factor = current / previous
+    //     distance.
+    //   • tap (pointerdown → pointerup with no drag) → click action.
+    //
+    // setPointerCapture keeps the gesture sticky on the canvas even if the
+    // finger drifts slightly outside the rectangle — without capture, fast
+    // moves can drop pointermove events and break the pan.
+
+    // DRAG_START_THRESHOLD: minimum pointer travel (px) to treat the gesture
+    // as a drag. Mouse and touch share the same threshold so behaviour is
+    // consistent. 8 px = noise-immune for fingers, still snappy for a mouse.
+    const DRAG_START_THRESHOLD = 8
+
+    /** Active pointers currently down on the canvas (keyed by pointerId). */
+    const pointers = new Map<number, { x: number; y: number }>()
+    /** Pinch bookkeeping: previous distance and midpoint between the two
+     *  fingers on the last move event, so we can compute deltas. */
+    let pinchPrevDist = 0
+    let pinchPrevMidX = 0
+    let pinchPrevMidY = 0
+    /** Anchor for a 1-finger pan: where the pointer was at pointerdown (in
+     *  page coords) and where the view sat at that moment. */
+    let panStartClientX = 0
+    let panStartClientY = 0
+    let panStartPanX = 0
+    let panStartPanY = 0
+    let panActive = false
+    let didDrag = false
+
+    function endGesture() {
+      pointers.clear()
+      pinchPrevDist = 0
+      panActive = false
+      cv!.classList.remove("grabbing")
+    }
+
     function onWheel(e: WheelEvent) {
       e.preventDefault()
       userTouchedRef.current = true
       zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12)
     }
-    function onMouseDown(e: MouseEvent) {
-      s.isDragging = true
-      s.didDrag = false
-      s.startX = e.clientX
-      s.startY = e.clientY
-      s.startPanX = s.panX
-      s.startPanY = s.panY
+
+    function onPointerDown(e: PointerEvent) {
+      // Only react to primary (mouse left button / first touch / pen tip).
+      // Wheel/tilt/etc come through too but with different buttons; ignore.
+      if (!e.isPrimary) return
+      try {
+        cv!.setPointerCapture(e.pointerId)
+      } catch {
+        // setPointerCapture can throw if the pointer is already released;
+        // safe to ignore — pointerup will fire normally.
+      }
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
       cv!.classList.add("grabbing")
+      s.hoverIdx = -1
+      s.hoverNode = null
+      hideTip()
+
+      if (pointers.size === 1) {
+        // Start a 1-finger pan.
+        panActive = true
+        didDrag = false
+        panStartClientX = e.clientX
+        panStartClientY = e.clientY
+        panStartPanX = s.panX
+        panStartPanY = s.panY
+      } else if (pointers.size === 2) {
+        // Transition into pinch: capture the current distance + midpoint so
+        // the next pointermove can compute the zoom factor and pan delta.
+        panActive = false
+        didDrag = true // any 2-finger gesture shouldn't be a tap
+        const [a, b] = Array.from(pointers.values())
+        pinchPrevDist = Math.hypot(b.x - a.x, b.y - a.y) || 1
+        pinchPrevMidX = (a.x + b.x) / 2
+        pinchPrevMidY = (a.y + b.y) / 2
+      }
     }
-    function onWindowMouseMove(e: MouseEvent) {
-      if (s.isDragging) {
-        const dx = e.clientX - s.startX
-        const dy = e.clientY - s.startY
-        if (Math.abs(dx) + Math.abs(dy) > 4) {
-          s.didDrag = true
+
+    function onPointerMove(e: PointerEvent) {
+      if (!pointers.has(e.pointerId)) return
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (pointers.size === 1 && panActive) {
+        // 1-finger pan.
+        const dx = e.clientX - panStartClientX
+        const dy = e.clientY - panStartClientY
+        if (!didDrag && Math.abs(dx) + Math.abs(dy) > DRAG_START_THRESHOLD) {
+          didDrag = true
           userTouchedRef.current = true
         }
-        s.panX = s.startPanX + dx
-        s.panY = s.startPanY + dy
-        s.hoverIdx = -1
-        s.hoverNode = null
-        hideTip()
+        if (didDrag) {
+          s.panX = panStartPanX + dx
+          s.panY = panStartPanY + dy
+        }
+        return
+      }
+
+      if (pointers.size >= 2) {
+        // Pinch zoom centered on the midpoint between the two fingers, plus
+        // pan from the midpoint delta.
+        const [a, b] = Array.from(pointers.values())
+        const curDist = Math.hypot(b.x - a.x, b.y - a.y) || 1
+        const midX = (a.x + b.x) / 2
+        const midY = (a.y + b.y) / 2
+        const f = curDist / pinchPrevDist
+        if (f !== 1) zoomAt(midX, midY, f)
+        // Midpoint delta → pan in screen space. Same conversion as the
+        // single-finger case so users don't feel a discontinuity when a
+        // second finger lands or lifts.
+        const dx = midX - pinchPrevMidX
+        const dy = midY - pinchPrevMidY
+        if (dx || dy) {
+          s.panX += dx
+          s.panY += dy
+        }
+        pinchPrevDist = curDist
+        pinchPrevMidX = midX
+        pinchPrevMidY = midY
+        didDrag = true
+        userTouchedRef.current = true
       }
     }
-    function onWindowMouseUp() {
-      if (s.isDragging) {
-        s.isDragging = false
-        cv!.classList.remove("grabbing")
+
+    function onPointerUp(e: PointerEvent) {
+      const wasInPointers = pointers.delete(e.pointerId)
+      try {
+        cv!.releasePointerCapture(e.pointerId)
+      } catch {
+        /* already released */
+      }
+
+      if (!wasInPointers) return
+
+      // Tap = pointer went down and up without exceeding the drag
+      // threshold. We check on the lift of the LAST remaining pointer so
+      // multi-finger gestures never fire a tap.
+      if (pointers.size === 0) {
+        const tapped = !didDrag
+        // Reset gesture state before running the click handler so the
+        // click path sees a clean slate.
+        endGesture()
+        if (tapped) handleTap(e.clientX, e.clientY)
+      } else if (pointers.size === 1) {
+        // One finger lifted during a pinch — resume 1-finger pan from the
+        // remaining finger's current position so the view doesn't jump.
+        const remaining = Array.from(pointers.values())[0]
+        panActive = true
+        panStartClientX = remaining.x
+        panStartClientY = remaining.y
+        panStartPanX = s.panX
+        panStartPanY = s.panY
+        pinchPrevDist = 0
       }
     }
+
+    function onPointerCancel(e: PointerEvent) {
+      pointers.delete(e.pointerId)
+      try {
+        cv!.releasePointerCapture(e.pointerId)
+      } catch {
+        /* already released */
+      }
+      if (pointers.size === 0) endGesture()
+    }
+
+    /** Resolve a tap to a coin and trigger the same open-asset path the old
+     *  click handler used. `hoverNode` is mouse-only, so we always go
+     *  through `nodeAt` here. */
+    function handleTap(clientX: number, clientY: number) {
+      const r = cv!.getBoundingClientRect()
+      const node = nodeAt(clientX - r.left, clientY - r.top)
+      if (!node) return
+      const coin = node.c
+      selectedIdRef.current = coin.id
+      const marketRow = rowsRef.current.find((rw) => rw.id === coin.id)
+      if (!marketRow) return
+      prefetchLinks(qc, coin.id)
+      openAssetRef.current(marketRow)
+    }
+
     function onCanvasMouseMove(e: MouseEvent) {
-      if (s.isDragging) return
+      // Pointer Events handle active drags; this only runs when no touch is
+      // happening, i.e. real mouse hover. Skip if any pointer is captured
+      // for an active gesture (touch + mouse hybrids exist on hybrids).
+      if (pointers.size > 0) return
       const r = cv!.getBoundingClientRect()
       const mx = e.clientX - r.left
       const my = e.clientY - r.top
@@ -1176,6 +1323,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       } else hideTip()
     }
     function onCanvasMouseLeave() {
+      if (pointers.size > 0) return
       s.hoverIdx = -1
       s.hoverNode = null
       hideTip()
@@ -1203,35 +1351,13 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       }
       return best
     }
-function onCanvasClick(e: MouseEvent) {
-      if (s.didDrag) return
-      // Резолвим монету по координатам клика: hoverNode может обнулиться микродвижением мыши при зажатой кнопке.
-      const r = cv!.getBoundingClientRect()
-      const node = s.hoverNode ?? nodeAt(e.clientX - r.left, e.clientY - r.top)
-      if (!node) return
-      const coin = node.c
-      // Выделяем монету (визуально) — отдельный ref, чтобы draw() читал напрямую.
-      // Повторный клик по этой же монете или выбор другой — просто перезаписывает id.
-      selectedIdRef.current = coin.id
-      // Stash the market row (with image) before navigating, so the modal
-      // header has price/%24h/marketCap INSTANTLY. We pass the MarketRow
-      // (not just the id) so useOpenAsset's internal stashMarketRow call
-      // populates the RQ cache and AssetDrawer's `market` prop is filled.
-      const marketRow = rowsRef.current.find((r) => r.id === coin.id)
-      if (!marketRow) {
-        // Shouldn't happen — every plotted coin comes from `rowsRef` — but
-        // bailing here is safer than opening a drawer with no header data.
-        return
-      }
-      prefetchLinks(qc, coin.id)
-      // Open the existing intercepting modal at /asset/[id].
-      openAssetRef.current(marketRow)
-    }
 
-    // Touch / fast-click: pre-warm the cache before the synthetic click
-    // resolves. No debounce — touch users have no hover, so the click IS the
-    // earliest signal we get.
+    // Pre-warm the cache as soon as the user lands on a coin. With Pointer
+    // Events this fires for both mouse and touch before the synthetic click
+    // resolves — gives the drawer an instant header on the cold path even
+    // when no hover happened first.
     function onCanvasPointerDown(e: PointerEvent) {
+      if (!e.isPrimary) return
       const r = cv!.getBoundingClientRect()
       const node = nodeAt(e.clientX - r.left, e.clientY - r.top)
       if (!node) return
@@ -1301,14 +1427,18 @@ function onCanvasClick(e: MouseEvent) {
     }, 120)
 
     // ---- Event wiring ----------------------------------------
+    // Pointer Events on the canvas drive every active gesture (mouse and
+    // touch through one path); mousemove stays only for desktop hover when
+    // no pointer is active. No synthetic click — taps are produced by
+    // pointerup when the gesture stayed under the drag threshold.
     cv.addEventListener("wheel", onWheel, { passive: false })
-    cv.addEventListener("mousedown", onMouseDown)
     cv.addEventListener("pointerdown", onCanvasPointerDown)
+    cv.addEventListener("pointerdown", onPointerDown)
+    cv.addEventListener("pointermove", onPointerMove)
+    cv.addEventListener("pointerup", onPointerUp)
+    cv.addEventListener("pointercancel", onPointerCancel)
     cv.addEventListener("mousemove", onCanvasMouseMove)
     cv.addEventListener("mouseleave", onCanvasMouseLeave)
-    cv.addEventListener("click", onCanvasClick)
-    window.addEventListener("mousemove", onWindowMouseMove)
-    window.addEventListener("mouseup", onWindowMouseUp)
     window.addEventListener("resize", onResize)
     window.addEventListener("keydown", onKeyDown)
 
@@ -1318,13 +1448,13 @@ function onCanvasClick(e: MouseEvent) {
       clearInterval(watchInterval)
       ro.disconnect()
       cv.removeEventListener("wheel", onWheel)
-      cv.removeEventListener("mousedown", onMouseDown)
       cv.removeEventListener("pointerdown", onCanvasPointerDown)
+      cv.removeEventListener("pointerdown", onPointerDown)
+      cv.removeEventListener("pointermove", onPointerMove)
+      cv.removeEventListener("pointerup", onPointerUp)
+      cv.removeEventListener("pointercancel", onPointerCancel)
       cv.removeEventListener("mousemove", onCanvasMouseMove)
       cv.removeEventListener("mouseleave", onCanvasMouseLeave)
-      cv.removeEventListener("click", onCanvasClick)
-      window.removeEventListener("mousemove", onWindowMouseMove)
-      window.removeEventListener("mouseup", onWindowMouseUp)
       window.removeEventListener("resize", onResize)
       window.removeEventListener("keydown", onKeyDown)
       hideTip()
@@ -1569,7 +1699,7 @@ function onCanvasClick(e: MouseEvent) {
         <canvas
           id="hot-coins-chart"
           ref={canvasRef}
-          className="absolute inset-0 w-full h-full z-[2] block cursor-grab"
+          className="absolute inset-0 w-full h-full z-[2] block cursor-grab touch-none"
         />
         <canvas
           ref={axisRef}
