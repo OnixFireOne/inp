@@ -99,8 +99,8 @@ export function AssetTable({ initialData }: AssetTableProps = {}) {
       </div>
 
       {/* Table */}
-      <div className="mt-4 border border-[var(--border)] rounded-[var(--radius)] overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="mt-4 border border-[var(--border)] rounded-[var(--radius)] overflow-x-auto">
+        <table className="w-full text-sm min-w-[560px]">
           <thead>
             <tr className="border-b border-[var(--border)] text-left text-xs text-[var(--text-mut)]">
               <th className="px-4 py-3 w-12">#</th>

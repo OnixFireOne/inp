@@ -155,34 +155,29 @@ pre {
   to { transform: translateX(0); opacity: 1; }
 }
 
-/* Drawer body: outer wrapper keeps overflow visible so tooltips can escape. */
-.drawer-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: visible;
-  position: relative;
-}
-
-/* Inner scroll container */
-.drawer-scroll {
-  height: 100%;
-  overflow-y: auto;
+/* `.drawer-scroll` was renamed to `.scrollbar-thin` after Task 6 review:
+   the old name implied an `overflow` declaration that no longer exists
+   here — keeping a no-op `overflow` rule alongside Tailwind's
+   `md:overflow-y-auto` would re-introduce a second mobile scroll
+   container (mobile is < md, so the `md:` Tailwind utility doesn't
+   apply, but a non-layered CSS class with `overflow-y:auto` would).
+   This file now ONLY ships scrollbar styling; actual scroll behavior is
+   Tailwind-driven on the consumer (see AssetOverview / CoinEditorModal). */
+.scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  /* Important: allow positioned children to escape horizontally */
-  overflow-x: visible;
 }
-.drawer-scroll::-webkit-scrollbar {
+.scrollbar-thin::-webkit-scrollbar {
   width: 6px;
 }
-.drawer-scroll::-webkit-scrollbar-track {
+.scrollbar-thin::-webkit-scrollbar-track {
   background: transparent;
 }
-.drawer-scroll::-webkit-scrollbar-thumb {
+.scrollbar-thin::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 999px;
 }
-.drawer-scroll::-webkit-scrollbar-thumb:hover {
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background: var(--text-mut);
 }
 

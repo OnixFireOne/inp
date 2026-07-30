@@ -174,6 +174,13 @@ function MobileDrawer(props: AssetDrawerProps & { onClose: () => void }) {
   //     coingeckoId's query state, so the body skeleton paints immediately
   //     on the cold path instead of briefly flashing the previous coin's
   //     (possibly empty) LinkList / EmptyState.
+  //
+  // The scroll container lives HERE (not inside AssetOverview's body) so it
+  // sits directly under Vaul's Content — Vaul hands the vertical swipe to
+  // the FIRST scrollable descendant when scrollTop === 0 and reclaims the
+  // gesture for drag-to-dismiss above that. `overscroll-contain` blocks the
+  // iOS rubber-band from chaining into the page scroll. `pb-[env(safe-area…)]`
+  // reserves space for the iOS home-indicator so the last link is reachable.
   return (
     <VaulDrawer.Root open={props.open} onOpenChange={props.onOpenChange} shouldScaleBackground={false}>
       <VaulDrawer.Portal>
@@ -186,13 +193,15 @@ function MobileDrawer(props: AssetDrawerProps & { onClose: () => void }) {
           <VaulDrawer.Title className="sr-only">
             {props.market?.name || props.coingeckoId || "Asset overview"}
           </VaulDrawer.Title>
-          <DrawerBody
-            key={props.coingeckoId ?? "_closed"}
-            open={props.open}
-            coingeckoId={props.coingeckoId}
-            market={props.market}
-            onClose={props.onClose}
-          />
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
+            <DrawerBody
+              key={props.coingeckoId ?? "_closed"}
+              open={props.open}
+              coingeckoId={props.coingeckoId}
+              market={props.market}
+              onClose={props.onClose}
+            />
+          </div>
         </VaulDrawer.Content>
       </VaulDrawer.Portal>
     </VaulDrawer.Root>

@@ -1,15 +1,16 @@
 import { AssetTable } from "@/components/AssetTable"
 import { HotCoinsBeeswarm } from "@/components/HotCoinsBeeswarm"
 import type { MarketsResponse } from "@/lib/types"
-import { INTERNAL_BASE_URL } from "@/lib/site"
+import { INTERNAL_BASE_URL, MARKETS_REVALIDATE_SECONDS } from "@/lib/site"
 
 // SSR prefetch: fetch markets server-side so the initial HTML already
 // contains real data. This eliminates the skeleton → data CLS shift.
+// revalidate window is shared with route cache TTL — see lib/site.ts.
 export default async function Home() {
   let initialData: MarketsResponse | null = null
   try {
     const res = await fetch(`${INTERNAL_BASE_URL}/api/markets?page=1`, {
-      next: { revalidate: 30 },
+      next: { revalidate: MARKETS_REVALIDATE_SECONDS },
     })
     if (res.ok) {
       initialData = await res.json()
