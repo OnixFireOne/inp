@@ -218,9 +218,11 @@ export function AssetOverview({
         </div>
       )}
 
-      {/* Body — LinkList area. Skeleton only here. */}
-      <div className={variant === "drawer" ? "drawer-body flex-1 min-h-0" : ""}>
-        <div className={variant === "drawer" ? "drawer-scroll p-5" : "p-6"}>
+      {/* Body — LinkList area. Skeleton only here.
+          Scroll container lives in MobileDrawer (AssetDrawer.tsx), so the
+          drawer variant here is a plain flex child. */}
+      <div className={variant === "drawer" ? "flex-1 min-h-0 overflow-x-visible" : ""}>
+        <div className={variant === "drawer" ? "p-5" : "p-6"}>
           {(() => {
             const view = decideBodyView({
               showBodySkeleton,
