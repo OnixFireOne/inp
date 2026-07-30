@@ -28,6 +28,44 @@ const GLOBAL_TTL = Number(process.env.GLOBAL_TTL_SECONDS ?? 120)
 const CLIENT_PER_PAGE = 100
 const COINGECKO_PER_PAGE = 250
 
+// Single-flight per cache key. When N concurrent requests miss the same KV
+// key (cold cache, stampede after TTL expiry, two-tab page navigation)
+// they all await the same in-flight Promise instead of each issuing their
+// own CoinGecko request. The slot is cleared in `finally` — including on
+// rejection — so a failed upstream doesn't poison subsequent calls.
+//
+// Scope: module-level, scoped to the Node process. On serverless multi-
+// instance deploys the same N requests would still fan out, but that's
+// outside this single-process cache stampede and is handled by Upstash's
+// eventual-consistency model.
+const inFlight = new Map<string, Promise<unknown>>()
+
+/** De-dupe concurrent work on `key`. If a Promise is already running for
+ *  `key`, return it; otherwise start `fn`, memoize the Promise, and clear
+ *  it in `finally` (so both success and rejection free the slot). */
+function singleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inFlight.get(key) as Promise<T> | undefined
+  if (existing) return existing
+  // Assign to a local first so the closure captures the same reference;
+  // otherwise TS complains about `p` being used before assignment inside
+  // the async IIFE's `finally`.
+  let p!: Promise<T>
+  p = (async () => {
+    try {
+      return await fn()
+    } finally {
+      // Only delete OUR slot — a later caller may have replaced the entry
+      // with its own Promise (shouldn't happen under JS single-threaded
+      // semantics, but defensive against future refactors).
+      if (inFlight.get(key) === (p as unknown as Promise<unknown>)) {
+        inFlight.delete(key)
+      }
+    }
+  })()
+  inFlight.set(key, p as unknown as Promise<unknown>)
+  return p
+}
+
 // Curated list of stable / gold / tokenized-bond symbols that the beeswarm
 // (and any "hot" view) hides. Symbols are matched case-insensitively. Symbols
 // in the second list are exact (e.g. USDC); symbols with a trailing "USD" /
@@ -101,44 +139,52 @@ export async function GET(req: NextRequest) {
     if (!ids.length) return json({ rows: [] }, 200)
 
     const cacheKey = `markets:ids:${ids.sort().join(",")}`
-    const cached = await kvGet<{ rows: MarketRow[] }>(cacheKey)
-    if (cached) return json(cached)
+    const payload = await singleFlight(cacheKey, async () => {
+      const cached = await kvGet<{ rows: MarketRow[] }>(cacheKey)
+      if (cached) return cached
 
-    const url =
-      `${BASE}/coins/markets?vs_currency=usd` +
-      `&ids=${encodeURIComponent(ids.join(","))}` +
-      `&order=market_cap_desc&per_page=${ids.length}` +
-      `&sparkline=false&price_change_percentage=24h,30d,1y`
+      const url =
+        `${BASE}/coins/markets?vs_currency=usd` +
+        `&ids=${encodeURIComponent(ids.join(","))}` +
+        `&order=market_cap_desc&per_page=${ids.length}` +
+        `&sparkline=false&price_change_percentage=24h,30d,1y`
 
-    const res = await fetch(url, { headers: getCoinGeckoHeaders() })
-    if (!res.ok) {
-      return json({ rows: [] }, 200)
-    }
+      const res = await fetch(url, { headers: getCoinGeckoHeaders() })
+      if (!res.ok) {
+        return { rows: [] as MarketRow[] }
+      }
 
-    const raw = (await res.json()) as Array<any>
-    const rows: MarketRow[] = raw.map((r) => ({ ...mapCoinGeckoRow(r), sparkline: [] }))
+      const raw = (await res.json()) as Array<any>
+      const rows: MarketRow[] = raw.map((r) => ({ ...mapCoinGeckoRow(r), sparkline: [] }))
 
-    const payload = { rows }
-    await kvSetEx(cacheKey, TTL, payload)
+      const fresh = { rows }
+      await kvSetEx(cacheKey, TTL, fresh)
+      return fresh
+    })
     return json(payload)
   }
 
   // Return one 250-row chunk of the global market-cap ranking, hitting
   // CoinGecko on a miss and caching the result. Returning `null` signals a
   // hard failure (non-OK response) so the caller can short-circuit cleanly.
+  // Wrapped in singleFlight on the same KV key so N concurrent misses
+  // collapse into one upstream call.
   async function getChunk(chunk: number): Promise<MarketRow[] | null> {
     const cacheKey = `markets:page:${chunk}`
-    const cached = await kvGet<MarketRow[]>(cacheKey)
-    if (cached) return cached
-    const url =
-      `${BASE}/coins/markets?vs_currency=usd` +
-      `&order=market_cap_desc&per_page=${COINGECKO_PER_PAGE}&page=${chunk}` +
-      `&sparkline=true&price_change_percentage=24h,30d,1y`
-    const res = await fetch(url, { headers: getCoinGeckoHeaders() })
-    if (!res.ok) return null
-    const raw = (await res.json()) as Array<any>
-    const rows = raw.map(mapCoinGeckoRow)
-    await kvSetEx(cacheKey, TTL, rows)
+    const rows = await singleFlight(cacheKey, async () => {
+      const cached = await kvGet<MarketRow[]>(cacheKey)
+      if (cached) return cached
+      const url =
+        `${BASE}/coins/markets?vs_currency=usd` +
+        `&order=market_cap_desc&per_page=${COINGECKO_PER_PAGE}&page=${chunk}` +
+        `&sparkline=true&price_change_percentage=24h,30d,1y`
+      const res = await fetch(url, { headers: getCoinGeckoHeaders() })
+      if (!res.ok) return null as MarketRow[] | null
+      const raw = (await res.json()) as Array<any>
+      const mapped = raw.map(mapCoinGeckoRow)
+      await kvSetEx(cacheKey, TTL, mapped)
+      return mapped
+    })
     return rows
   }
 
@@ -224,26 +270,30 @@ async function buildAllRow(rows: MarketRow[]): Promise<MarketRow | null> {
   // cache every refresh of /api/markets?page=1 hits CoinGecko twice. Cache
   // the raw `data` payload; the synthetic row (incl. the sparkline, which
   // is rebuilt from the freshly-loaded chunked rows) is NOT cached.
+  // Single-flighted on the same KV key so N concurrent /api/markets?page=1
+  // hits (SSR + client RQ + beeswarm paged loader) share one /global call.
   const GLOBAL_KEY = "coingecko:global:usd"
-  let g: any = await kvGet<any>(GLOBAL_KEY)
-  if (!g) {
+  const g = (await singleFlight(GLOBAL_KEY, async () => {
+    const cached = await kvGet<any>(GLOBAL_KEY)
+    if (cached) return cached
     try {
       const url = `${BASE}/global`
       const res = await fetch(url, { headers: getCoinGeckoHeaders() })
-      if (res.ok) {
-        const raw = (await res.json()) as any
-        g = raw?.data ?? null
-        // Only cache successful + well-formed payloads; failures fall back
-        // to `return null` below and stay uncached so the next request
-        // can try again immediately.
-        if (g && g.total_market_cap && g.total_volume) {
-          await kvSetEx(GLOBAL_KEY, GLOBAL_TTL, g)
-        }
+      if (!res.ok) return null as any
+      const raw = (await res.json()) as any
+      const data = raw?.data ?? null
+      // Only cache successful + well-formed payloads; failures fall back
+      // to `return null` below and stay uncached so the next request
+      // can try again immediately. The singleFlight slot is still cleared
+      // in `finally` either way, so an upstream outage doesn't poison it.
+      if (data && data.total_market_cap && data.total_volume) {
+        await kvSetEx(GLOBAL_KEY, GLOBAL_TTL, data)
       }
+      return data
     } catch {
-      g = null
+      return null as any
     }
-  }
+  })) as any
   if (!g || !g.total_market_cap || !g.total_volume) return null
 
   const totalMc = Number(g.total_market_cap.usd)
