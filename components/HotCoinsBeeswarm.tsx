@@ -20,6 +20,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import type { MarketRow } from "@/lib/types"
 import { prefetchLinks, prefetchLinksOnHover, prefetchLinksOnPointerDown } from "@/lib/prefetch"
 import { useOpenAsset } from "@/lib/useOpenAsset"
+import { HOT_COINS_SNAPSHOT_VERSION, type SwarmCoin } from "@/lib/hotCoinsSnapshot"
 
 // -------------------------------------------------------------
 // Persisted user settings (localStorage)
@@ -73,6 +74,7 @@ interface Coin {
   name: string
   marketCap: number
   pct: number
+  price: number
   stable: boolean
   /** CoinGecko market_cap_rank — null when unavailable. */
   rank: number | null
@@ -144,6 +146,16 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
   const prefetchAssetRef = useRef(prefetchAsset)
   // Выбранная монета (только ref — draw() читает напрямую, без ре-рендера).
   const selectedIdRef = useRef<string | null>(null)
+  // window.__HOT_COINS_SNAPSHOT__ is opt-in via ?snapshot=1 — regular
+  // visitors shouldn't pay for it. Read once at mount into a ref so it can
+  // never influence render (same coins/filters/layout/animation either way);
+  // only gates whether the engine effect ever writes to window.
+  const snapshotEnabledRef = useRef(false)
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    snapshotEnabledRef.current = new URLSearchParams(window.location.search).get("snapshot") === "1"
+  }, [])
 
   useEffect(() => {
     openAssetRef.current = openAsset
@@ -282,6 +294,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         name: r.name,
         marketCap: r.marketCap,
         pct: r.change24h,
+        price: r.price ?? 0,
         stable: !!r.stable,
         rank: typeof r.rank === "number" && r.rank > 0 ? r.rank : null,
       })
@@ -336,6 +349,9 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     fitZoom: 1,
     fitPanX: 0,
     fitPanY: 0,
+    // Count of nodes isOffScreen() found this frame in drawEdgePins() — reused
+    // by the snapshot throttle key below so it never re-runs isOffScreen().
+    offScreenCount: 0,
   })
 
   // Mirror latest slider values into a ref the loop reads.
@@ -465,6 +481,24 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
     if (!ctx || !axc) return
 
     const s = stateRef.current
+    // Cheap key draw() compares every frame to decide whether the snapshot
+    // needs rebuilding: the source coin array's identity (changes only when
+    // a new page of rows is merged in), the plotted count (changes when
+    // mode/topN pick a different slice), and the off-screen count that
+    // drawEdgePins() already computes every frame via isOffScreen() (changes
+    // when a coin crosses the viewport edge under the SAME data/count, e.g.
+    // during pan/zoom) — so a mainSwarm/edgePins reclassification can't go
+    // unnoticed. None of the three move on cosmetic slider drags
+    // (gravity/density/unit/...), so those still can't spam rebuilds.
+    let lastSnapshotCoins: Coin[] | null = null
+    let lastSnapshotCount = -1
+    let lastSnapshotOffScreen = -1
+    // Time floor on top of the key check: offScreenCount alone can flip
+    // nearly every frame during an active pan/zoom, which would otherwise
+    // disable the throttle exactly when it matters most. -Infinity so the
+    // very first write is never delayed by it.
+    let lastSnapshotWriteTime = -Infinity
+    const SNAPSHOT_MIN_INTERVAL_MS = 500
 
     // ---- view helpers (closures over state) -------------------
     function sxWorld(p: number, unitPx: number, scale: "linear" | "log") {
@@ -892,6 +926,29 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       ctx!.globalAlpha = 1
       ctx!.restore()
       drawEdgePins()
+      // Snapshot: gated behind ?snapshot=1 (snapshotEnabledRef, read once at
+      // mount) so regular visitors never pay for it — nothing below runs,
+      // and window.__HOT_COINS_SNAPSHOT__ is never touched, without the flag.
+      // Rebuilt only when the plotted coin set actually changed (cheap key:
+      // source array identity + plotted count), not on every frame — cosmetic
+      // slider drags (gravity/density/unit/...) can't spam rebuilds.
+      if (snapshotEnabledRef.current) {
+        const curCoins = sourceCoinsRef.current
+        const curCount = s.nodes.length
+        const curOffScreen = s.offScreenCount
+        const keyChanged =
+          curCoins !== lastSnapshotCoins ||
+          curCount !== lastSnapshotCount ||
+          curOffScreen !== lastSnapshotOffScreen
+        const now = performance.now()
+        if (keyChanged && now - lastSnapshotWriteTime >= SNAPSHOT_MIN_INTERVAL_MS) {
+          lastSnapshotCoins = curCoins
+          lastSnapshotCount = curCount
+          lastSnapshotOffScreen = curOffScreen
+          lastSnapshotWriteTime = now
+          writeSnapshot()
+        }
+      }
       drawAxisStrip()
       if (zoomLabelRef.current) {
         zoomLabelRef.current.textContent = Math.round((s.zoom / (s.fitZoom || s.zoom)) * 100) + "%"
@@ -956,25 +1013,38 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       }
     }
 
-    function drawEdgePins() {
+    // Viewport bounds (screen space) used both to decide which nodes get an
+    // edge pin drawn and — via isOffScreen() — to split the snapshot into
+    // mainSwarm/edgePins from the exact same s.nodes array. Single source of
+    // truth so the two can never disagree about who's off-screen.
+    function viewBounds() {
       const p = paramsRef.current
       const vMode = p.orient === "v"
       const stripBottom = vMode ? 0 : 30
       const stripLeft = vMode ? AXIS_W : 0
       const m = 12
-      const minX = stripLeft + m
-      const maxX = s.cssW - m
-      const minY = m
-      const maxY = s.cssH - stripBottom - m
+      return { minX: stripLeft + m, maxX: s.cssW - m, minY: m, maxY: s.cssH - stripBottom - m }
+    }
+    function isOffScreen(n: Node, b: { minX: number; maxX: number; minY: number; maxY: number }) {
+      const R = rot(n.x, n.y)
+      const sx = s.panX + R.x * s.zoom
+      const sy = s.panY + R.y * s.zoom
+      return sx < b.minX || sx > b.maxX || sy < b.minY || sy > b.maxY
+    }
+
+    function drawEdgePins() {
+      const p = paramsRef.current
+      const { minX, maxX, minY, maxY } = viewBounds()
       s.edgePins = []
+      let offScreenCount = 0
       const buckets: Record<string, Node[]> = {}
       for (const n of s.nodes) {
         const R = rot(n.x, n.y)
         // 1) текущий кадр — за краем ли сейчас?
         const sx = s.panX + R.x * s.zoom
         const sy = s.panY + R.y * s.zoom
-        const offCur = sx < minX || sx > maxX || sy < minY || sy > maxY
-        if (!offCur) continue
+        if (!isOffScreen(n, { minX, maxX, minY, maxY })) continue
+        offScreenCount++
         if (!p.pinAll) {
           // Режим «только выбросы»: пинить лишь тех, кто не влез бы и в дефолтный кадр.
           const dx = s.fitPanX + R.x * s.fitZoom
@@ -994,6 +1064,7 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
         const key = edge + ":" + sign
         ;(buckets[key] ||= []).push(n)
       }
+      s.offScreenCount = offScreenCount
       type Edge = "L" | "R" | "T" | "B"
       type Pin = { edge: Edge; x: number; y: number; pos: number; arr: Node[] }
       const pins: Pin[] = []
@@ -1076,6 +1147,32 @@ export function HotCoinsBeeswarm({ coins, height = 560 }: HotCoinsBeeswarmProps)
       }
     }
 
+    // Publishes window.__HOT_COINS_SNAPSHOT__ straight from s.nodes — the
+    // exact array the loop above just drew — split by the SAME isOffScreen()
+    // test drawEdgePins() uses. No re-fetch, no re-filter, no second source.
+    function writeSnapshot() {
+      const b = viewBounds()
+      const mainSwarm: SwarmCoin[] = []
+      const edgePins: SwarmCoin[] = []
+      for (const n of s.nodes) {
+        const coin: SwarmCoin = {
+          id: n.c.id,
+          ticker: n.c.symbol,
+          change24h: n.c.pct,
+          price: n.c.price,
+          marketCap: n.c.marketCap,
+        }
+        ;(isOffScreen(n, b) ? edgePins : mainSwarm).push(coin)
+      }
+      const btcNode = s.nodes.find((n) => n.c.symbol === "BTC")
+      window.__HOT_COINS_SNAPSHOT__ = {
+        version: HOT_COINS_SNAPSHOT_VERSION,
+        ts: new Date().toISOString(),
+        btc: btcNode ? { price: btcNode.c.price, change24h: btcNode.c.pct } : null,
+        mainSwarm,
+        edgePins,
+      }
+    }
 
     function zoomAt(cx: number, cy: number, f: number) {
       const r = cv!.getBoundingClientRect()
